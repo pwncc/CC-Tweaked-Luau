@@ -184,4 +184,74 @@ final class LuauNative {
      * @return The traceback.
      */
     static native String debugTrace(long thread);
+
+    /**
+     * Create the native terminal for this machine and install the {@code term} global. All {@code term} methods then
+     * execute natively, without crossing into Java.
+     *
+     * @param state         The current state.
+     * @param width         The terminal width.
+     * @param height        The terminal height.
+     * @param colour        Whether the terminal supports colour.
+     * @param cursorX       The cursor's (0-based) x position.
+     * @param cursorY       The cursor's (0-based) y position.
+     * @param curFg         The current text colour (palette index).
+     * @param curBg         The current background colour (palette index).
+     * @param blink         Whether the cursor is blinking.
+     * @param palette       The current palette, as 16 x 3 doubles.
+     * @param nativePalette The default palette, as 16 x 3 doubles.
+     * @param text          The current text contents, {@code height * width} bytes.
+     * @param fg            The current text colours.
+     * @param bg            The current background colours.
+     */
+    static native void initTerm(
+        long state, int width, int height, boolean colour,
+        int cursorX, int cursorY, int curFg, int curBg, boolean blink,
+        double[] palette, double[] nativePalette,
+        byte[] text, byte[] fg, byte[] bg
+    );
+
+    /**
+     * Refresh the native terminal's size and contents from Java, e.g. after a resize.
+     *
+     * @param state  The current state.
+     * @param width  The new width.
+     * @param height The new height.
+     * @param text   The text contents, {@code height * width} bytes.
+     * @param fg     The text colours.
+     * @param bg     The background colours.
+     */
+    static native void termSetContent(long state, int width, int height, byte[] text, byte[] fg, byte[] bg);
+
+    /**
+     * Encode the native terminal's dirty state into the shared response buffer, clearing the dirty flags.
+     *
+     * @param state The current state.
+     * @return The number of encoded bytes, or 0 if nothing has changed.
+     */
+    static native int syncTerm(long state);
+
+    /**
+     * Wrap {@code os.epoch}/{@code os.time}/{@code os.day} with native implementations of the utc/local locales.
+     *
+     * @param state The current state.
+     */
+    static native void installFastOs(long state);
+
+    /**
+     * Create the native redstone mirror and install the {@code redstone}/{@code rs} globals.
+     *
+     * @param state   The current state.
+     * @param inputs  The current inputs: 6 analog levels, then 6 bundled masks.
+     * @param outputs The current outputs, in the same layout.
+     */
+    static native void installRedstone(long state, int[] inputs, int[] outputs);
+
+    /**
+     * Update the native redstone input mirror.
+     *
+     * @param state  The current state.
+     * @param inputs The current inputs: 6 analog levels, then 6 bundled masks.
+     */
+    static native void setRedstoneInput(long state, int[] inputs);
 }

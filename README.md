@@ -89,5 +89,7 @@ Computers now run on the native [Luau](https://luau.org/) VM instead of the Coba
 | String format/upper/gsub              |      54 ms |       206 ms | 3.8x faster |
 | Pattern matching (gmatch)             |    1432 ms |      2700 ms | 1.9x faster |
 | String concatenation                  |      64 ms |        88 ms | 1.4x faster |
-| Java API calls (200k x os.epoch)      |     263 ms |       210 ms | 1.3x slower |
-| Terminal redraw (100k term calls)     |      87 ms |        59 ms | 1.5x slower |
+| Terminal redraw (100k term calls)     |      20 ms |        59 ms | 3.0x faster |
+| os time API (200k calls)              |      15 ms |       210 ms | 14x faster  |
+
+The `term`, `redstone` and `os` time APIs are implemented natively inside the Luau runtime, so the calls used most heavily by real programs no longer cross into Java.

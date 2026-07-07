@@ -13,7 +13,13 @@ import dan200.computercraft.api.lua.ILuaFunction;
 import dan200.computercraft.api.lua.LuaException;
 import dan200.computercraft.core.CoreConfig;
 import dan200.computercraft.core.Logging;
+import dan200.computercraft.core.apis.RedstoneAPI;
+import dan200.computercraft.core.apis.TermAPI;
+import dan200.computercraft.core.computer.ComputerSide;
 import dan200.computercraft.core.computer.TimeoutState;
+import dan200.computercraft.core.redstone.RedstoneAccess;
+import dan200.computercraft.core.terminal.Terminal;
+import dan200.computercraft.core.util.Colour;
 import dan200.computercraft.core.lua.ILuaMachine;
 import dan200.computercraft.core.lua.MachineEnvironment;
 import dan200.computercraft.core.lua.MachineException;
@@ -38,6 +44,7 @@ import java.util.HashMap;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 
 /**
@@ -91,6 +98,20 @@ public final class LuauMachine implements ILuaMachine {
     private byte @Nullable [] largeResponse;
 
     /**
+     * The terminal this machine's native term API is bound to, if any.
+     */
+    private @Nullable Terminal terminal;
+    private int termWidth = -1;
+    private int termHeight = -1;
+
+    /**
+     * The redstone state this machine's native redstone API is bound to, if any.
+     */
+    private @Nullable RedstoneAccess redstone;
+    private final int[] redstoneInputs = new int[12];
+    private final int[] redstoneScratch = new int[12];
+
+    /**
      * Objects exposed to Lua, indexed by handle. Never shrinks over the machine's lifetime; entries are released when
      * the machine is closed.
      */
@@ -135,6 +156,9 @@ public final class LuauMachine implements ILuaMachine {
             // them up.
             if (!modules.isEmpty()) setGlobal("_CC_NATIVE_MODULES", modules);
 
+            // Wrap os.epoch/os.time/os.day with native implementations.
+            LuauNative.installFastOs(state);
+
             mainThread = LuauNative.loadBios(state, bios.readAllBytes(), "@bios.lua");
         } catch (MachineException | IOException | RuntimeException e) {
             LuauNative.closeState(state);
@@ -154,10 +178,178 @@ public final class LuauMachine implements ILuaMachine {
     }
 
     private void addAPI(ILuaAPI api, Map<Object, Object> modules) {
+        // The term API is implemented natively: every method runs inside the Luau VM against a shadow terminal,
+        // which is synced back to the Java terminal after execution.
+        if (api instanceof TermAPI termApi) {
+            installTerm(termApi.getTerminal());
+            return;
+        }
+
+        // Likewise redstone: inputs are mirrored into the VM, outputs are synced back out.
+        if (api instanceof RedstoneAPI redstoneApi) {
+            installRedstone(redstoneApi.redstoneAccess());
+            return;
+        }
+
         for (var name : api.getNames()) setGlobal(name, api);
 
         var moduleName = api.getModuleName();
         if (moduleName != null) modules.put(moduleName, api);
+    }
+
+    private void installTerm(Terminal terminal) {
+        this.terminal = terminal;
+        termWidth = terminal.getWidth();
+        termHeight = terminal.getHeight();
+
+        var palette = new double[48];
+        var nativePalette = new double[48];
+        for (var i = 0; i < 16; i++) {
+            var colours = terminal.getPalette().getColour(i);
+            palette[i * 3] = colours[0];
+            palette[i * 3 + 1] = colours[1];
+            palette[i * 3 + 2] = colours[2];
+
+            var colour = Colour.fromInt(i);
+            nativePalette[i * 3] = colour.getR();
+            nativePalette[i * 3 + 1] = colour.getG();
+            nativePalette[i * 3 + 2] = colour.getB();
+        }
+
+        var contents = snapshotTerminal(terminal);
+        LuauNative.initTerm(
+            state, termWidth, termHeight, terminal.isColour(),
+            terminal.getCursorX(), terminal.getCursorY(), terminal.getTextColour(), terminal.getBackgroundColour(),
+            terminal.getCursorBlink(), palette, nativePalette,
+            contents[0], contents[1], contents[2]
+        );
+    }
+
+    private void installRedstone(RedstoneAccess redstone) {
+        this.redstone = redstone;
+        readRedstoneInputs(redstoneInputs);
+
+        var outputs = new int[12];
+        for (var i = 0; i < 6; i++) {
+            var side = ComputerSide.valueOf(i);
+            outputs[i] = redstone.getOutput(side);
+            outputs[6 + i] = redstone.getBundledOutput(side);
+        }
+        LuauNative.installRedstone(state, redstoneInputs, outputs);
+    }
+
+    private void readRedstoneInputs(int[] into) {
+        var redstone = Objects.requireNonNull(this.redstone);
+        for (var i = 0; i < 6; i++) {
+            var side = ComputerSide.valueOf(i);
+            into[i] = redstone.getInput(side);
+            into[6 + i] = redstone.getBundledInput(side);
+        }
+    }
+
+    /**
+     * Push the current redstone inputs into the VM if they have changed since the last resume.
+     */
+    private void updateRedstoneInputs() {
+        if (redstone == null) return;
+
+        readRedstoneInputs(redstoneScratch);
+        if (!Arrays.equals(redstoneScratch, redstoneInputs)) {
+            System.arraycopy(redstoneScratch, 0, redstoneInputs, 0, 12);
+            LuauNative.setRedstoneInput(state, redstoneInputs);
+        }
+    }
+
+    /**
+     * Capture the terminal's contents as {@code height * width} byte planes (text, foreground, background).
+     */
+    private byte[][] snapshotTerminal(Terminal terminal) {
+        var width = terminal.getWidth();
+        var height = terminal.getHeight();
+        var text = new byte[width * height];
+        var fg = new byte[width * height];
+        var bg = new byte[width * height];
+        synchronized (terminal) {
+            for (var y = 0; y < height; y++) {
+                var textLine = terminal.getLine(y);
+                var fgLine = terminal.getTextColourLine(y);
+                var bgLine = terminal.getBackgroundColourLine(y);
+                for (var x = 0; x < width; x++) {
+                    text[y * width + x] = (byte) textLine.charAt(x);
+                    fg[y * width + x] = (byte) fgLine.charAt(x);
+                    bg[y * width + x] = (byte) bgLine.charAt(x);
+                }
+            }
+        }
+        return new byte[][]{ text, fg, bg };
+    }
+
+    /**
+     * Sync the native terminal's changes back to the Java terminal. Called after each resume, and from the native
+     * interrupt callback while long-running code is drawing.
+     */
+    void syncTermNow() {
+        var terminal = this.terminal;
+        if (terminal == null && redstone == null) return;
+
+        int length;
+        synchronized (this) {
+            if (isClosed) return;
+            length = LuauNative.syncTerm(state);
+        }
+        if (length <= 0) return;
+
+        fastResp.clear().limit(length);
+        var flags = fastResp.get();
+
+        if (terminal != null) synchronized (terminal) {
+            if ((flags & 1) != 0) {
+                var x = fastResp.getInt();
+                var y = fastResp.getInt();
+                var fg = fastResp.getInt();
+                var bg = fastResp.getInt();
+                var blink = fastResp.get() != 0;
+                terminal.setCursorPos(x, y);
+                terminal.setTextColour(fg);
+                terminal.setBackgroundColour(bg);
+                terminal.setCursorBlink(blink);
+            }
+
+            if ((flags & 2) != 0) {
+                var palette = terminal.getPalette();
+                for (var i = 0; i < 16; i++) {
+                    palette.setColour(i, fastResp.getDouble(), fastResp.getDouble(), fastResp.getDouble());
+                }
+                terminal.setChanged();
+            }
+
+            if ((flags & 4) != 0) {
+                var count = fastResp.getInt();
+                var line = new byte[termWidth];
+                for (var i = 0; i < count; i++) {
+                    var y = fastResp.getInt();
+                    fastResp.get(line);
+                    var text = new String(line, StandardCharsets.ISO_8859_1);
+                    fastResp.get(line);
+                    var fg = new String(line, StandardCharsets.ISO_8859_1);
+                    fastResp.get(line);
+                    var bg = new String(line, StandardCharsets.ISO_8859_1);
+                    if (y >= 0 && y < terminal.getHeight()) terminal.setLine(y, text, fg, bg);
+                }
+            }
+        }
+
+        if ((flags & 8) != 0) {
+            var redstone = this.redstone;
+            for (var i = 0; i < 6; i++) {
+                var value = fastResp.getInt();
+                if (redstone != null) redstone.setOutput(ComputerSide.valueOf(i), value);
+            }
+            for (var i = 0; i < 6; i++) {
+                var value = fastResp.getInt();
+                if (redstone != null) redstone.setBundledOutput(ComputerSide.valueOf(i), value);
+            }
+        }
     }
 
     private void setGlobal(String name, @Nullable Object value) {
@@ -204,8 +396,22 @@ public final class LuauMachine implements ILuaMachine {
                 args = encodeValues(values);
             }
 
+            // Refresh the native mirrors of Java-owned state.
+            updateRedstoneInputs();
+            var terminal = this.terminal;
+            if (terminal != null && (terminal.getWidth() != termWidth || terminal.getHeight() != termHeight)) {
+                termWidth = terminal.getWidth();
+                termHeight = terminal.getHeight();
+                var contents = snapshotTerminal(terminal);
+                LuauNative.termSetContent(state, termWidth, termHeight, contents[0], contents[1], contents[2]);
+            }
+
             LuauNative.setFlags(state, currentFlags());
             var response = LuauNative.resume(state, mainThread, args);
+
+            // Push any native terminal/redstone changes back to Java before we
+            // potentially tear the machine down.
+            syncTermNow();
 
             if (timeout.isHardAborted() || isDisposed) {
                 closeInternal();

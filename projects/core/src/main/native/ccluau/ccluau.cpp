@@ -16,9 +16,14 @@
 #include <jni.h>
 
 #include <atomic>
+#include <cmath>
+#include <algorithm>
+#include <cctype>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
+#include <chrono>
 #include <string>
 #include <vector>
 
@@ -73,6 +78,60 @@ static const size_t FAST_BUFFER_SIZE = 256 * 1024;
 // ---------------------------------------------------------------------------
 // Per-machine state
 // ---------------------------------------------------------------------------
+
+// A native shadow of the computer's terminal. All term.* methods operate on
+// this without crossing into Java; the state is synced to the Java Terminal
+// after each resume (and periodically from the interrupt callback while
+// long-running code draws without yielding).
+struct NativeTerm {
+    int width = 0, height = 0;
+    bool colour = true;
+
+    // Row-major width*height byte planes. fg/bg hold raw bytes (usually hex
+    // digits), mirroring Java's TextBuffer semantics.
+    std::vector<uint8_t> text, fg, bg;
+
+    int cursorX = 0, cursorY = 0; // 0-based; may be out of bounds
+    int curFg = 0, curBg = 15;    // palette indices, 0 = white .. 15 = black
+    bool blink = false;
+
+    double palette[16][3] = {};
+    double nativePalette[16][3] = {};
+
+    std::vector<uint8_t> lineDirty;
+    bool cursorDirty = false;
+    bool paletteDirty = false;
+    bool anyLineDirty = false;
+    double lastSync = 0;
+
+    bool anyDirty() const {
+        return cursorDirty || paletteDirty || anyLineDirty;
+    }
+
+    void markLine(int y) {
+        if (y >= 0 && y < height) {
+            lineDirty[y] = 1;
+            anyLineDirty = true;
+        }
+    }
+
+    void markAllLines() {
+        for (int y = 0; y < height; y++) lineDirty[y] = 1;
+        anyLineDirty = height > 0;
+    }
+};
+
+// A native mirror of the computer's redstone state. Inputs are pushed from
+// Java when they change; outputs are written natively and synced back to Java
+// alongside the terminal.
+struct NativeRedstone {
+    int input[6] = {};
+    int bundledInput[6] = {};
+    int output[6] = {};
+    int bundledOutput[6] = {};
+    bool outputDirty = false;
+};
+
 struct MachineState {
     JavaVM* jvm = nullptr;
     jobject machine = nullptr; // global ref to the LuauMachine
@@ -85,13 +144,51 @@ struct MachineState {
     uint8_t* fastResp = nullptr;
     jobject fastArgsRef = nullptr;
     jobject fastRespRef = nullptr;
+
+    NativeTerm* term = nullptr;
+    NativeRedstone* redstone = nullptr;
+
+    // The chain of threads suspended by a pause break, innermost first,
+    // outermost (main) last. A pause interrupts the running (leaf) thread, and
+    // the break then propagates up through every parent coroutine.resume. To
+    // resume, we must run the leaf first: Luau's coresumecont re-breaks a
+    // parent whose child is still LUA_BREAK, so the child's break must clear
+    // before its parent is resumed.
+    std::vector<lua_State*> breakChain;
+
+    bool anyStateDirty() const {
+        return (term != nullptr && term->anyDirty()) || (redstone != nullptr && redstone->outputDirty);
+    }
 };
+
+static MachineState* getMachine(lua_State* L);
+
+// Record the innermost broken thread (the one the interrupt fired on).
+static void recordBreakLeaf(MachineState* m, lua_State* L) {
+    m->breakChain.clear();
+    m->breakChain.push_back(L);
+}
+
+// Record a parent thread as the break propagates up through it. Called from
+// the debuginterrupt callback, which fires once per interrupted parent.
+static void recordBreakParent(MachineState* m, lua_State* L) {
+    for (lua_State* existing : m->breakChain) {
+        if (existing == L) return;
+    }
+    m->breakChain.push_back(L);
+}
+
+static void debugInterruptCallback(lua_State* L, lua_Debug* ar) {
+    (void) ar;
+    recordBreakParent(getMachine(L), L);
+}
 
 static jmethodID g_invokeMethod = nullptr;     // LuauMachine.invoke(int, int, long, byte[]) -> byte[]
 static jmethodID g_resumeMethod = nullptr;     // LuauMachine.resumeCallback(long, byte[]) -> byte[]
 static jmethodID g_invokeFastMethod = nullptr; // LuauMachine.invokeFast(int, int, long, int) -> int
 static jmethodID g_resumeFastMethod = nullptr; // LuauMachine.resumeFast(long, int) -> int
 static jmethodID g_takeLargeMethod = nullptr;  // LuauMachine.takeLargeResponse() -> byte[]
+static jmethodID g_syncTermMethod = nullptr;   // LuauMachine.syncTermNow() -> void
 
 static MachineState* getMachine(lua_State* L) {
     return static_cast<MachineState*>(lua_callbacks(lua_mainthread(L))->userdata);
@@ -712,17 +809,619 @@ static int ccluauLoadstring(lua_State* L) {
 }
 
 // ---------------------------------------------------------------------------
+// Native terminal (term API)
+// ---------------------------------------------------------------------------
+static const char* HEX_DIGITS = "0123456789abcdef";
+
+static NativeTerm* getTerm(lua_State* L) {
+    NativeTerm* term = getMachine(L)->term;
+    if (term == nullptr) luaL_error(L, "Terminal unavailable");
+    return term;
+}
+
+// The display name of a value's type, following Java-side conventions
+// (LuaValues.getType), including custom __name metatable entries.
+static const char* displayTypeName(lua_State* L, int idx) {
+    int t = lua_type(L, idx);
+    if ((t == LUA_TTABLE || t == LUA_TUSERDATA) && lua_getmetatable(L, idx)) {
+        lua_rawgetfield(L, -1, "__name");
+        if (lua_type(L, -1) == LUA_TSTRING) {
+            // The string stays anchored by the metatable, so this is safe to
+            // return after popping.
+            const char* name = lua_tostring(L, -1);
+            lua_pop(L, 2);
+            return name;
+        }
+        lua_pop(L, 2);
+    }
+
+    switch (t) {
+    case LUA_TNONE:
+    case LUA_TNIL:
+        return "nil";
+    case LUA_TBOOLEAN:
+        return "boolean";
+    case LUA_TNUMBER:
+    case LUA_TINTEGER:
+        return "number";
+    case LUA_TSTRING:
+        return "string";
+    case LUA_TTABLE:
+        return "table";
+    default:
+        return luaL_typename(L, idx);
+    }
+}
+
+// Mirrors IArguments.getFiniteDouble: a strict (finite) number.
+static double checkJavaFiniteNumber(lua_State* L, int idx) {
+    int t = lua_type(L, idx);
+    if (t != LUA_TNUMBER && t != LUA_TINTEGER) {
+        luaL_error(L, "bad argument #%d (number expected, got %s)", idx, displayTypeName(L, idx));
+    }
+    double value = lua_tonumber(L, idx);
+    if (!std::isfinite(value)) {
+        luaL_error(L, "bad argument #%d (number expected, got %s)", idx, std::isnan(value) ? "nan" : (value > 0 ? "inf" : "-inf"));
+    }
+    return value;
+}
+
+// Mirrors IArguments.getInt: a (finite) number, truncated to int.
+static int checkJavaInt(lua_State* L, int idx) {
+    return (int) (long long) checkJavaFiniteNumber(L, idx);
+}
+
+// Mirrors IArguments.getBoolean: a strict boolean.
+static bool checkJavaBoolean(lua_State* L, int idx) {
+    if (lua_type(L, idx) != LUA_TBOOLEAN) {
+        luaL_error(L, "bad argument #%d (boolean expected, got %s)", idx, displayTypeName(L, idx));
+    }
+    return lua_toboolean(L, idx) != 0;
+}
+
+// Mirrors IArguments.getBytes: a strict string (no number coercion).
+static const char* checkJavaString(lua_State* L, int idx, size_t* len) {
+    if (lua_type(L, idx) != LUA_TSTRING) {
+        luaL_error(L, "bad argument #%d (string expected, got %s)", idx, displayTypeName(L, idx));
+    }
+    return lua_tolstring(L, idx, len);
+}
+
+// Mirrors TermMethods.parseColour: a colour group to a palette index (0-15).
+static int parseColour(lua_State* L, int idx) {
+    int group = checkJavaInt(L, idx);
+    if (group <= 0) luaL_error(L, "Colour out of range");
+    // getHighestBit(group) - 1
+    int colour = 31;
+    while (colour > 0 && !((unsigned) group >> colour)) colour--;
+    if (colour > 15) luaL_error(L, "Colour out of range");
+    return colour;
+}
+
+static int termWrite(lua_State* L) {
+    NativeTerm* t = getTerm(L);
+
+    size_t len;
+    const char* s;
+    if (lua_isnone(L, 1)) {
+        s = "nil";
+        len = 3;
+    } else {
+        s = luaL_tolstring(L, 1, &len); // Lua tostring semantics, honours __tostring.
+    }
+
+    int x = t->cursorX, y = t->cursorY;
+    if (y >= 0 && y < t->height && len > 0) {
+        int start = x < 0 ? 0 : x;
+        long long endL = (long long) x + (long long) len;
+        int end = endL > t->width ? t->width : (int) endL;
+        if (start < end) {
+            size_t row = (size_t) y * t->width;
+            memcpy(t->text.data() + row + start, s + (start - x), (size_t) (end - start));
+            memset(t->fg.data() + row + start, HEX_DIGITS[t->curFg], (size_t) (end - start));
+            memset(t->bg.data() + row + start, HEX_DIGITS[t->curBg], (size_t) (end - start));
+            t->markLine(y);
+        }
+    }
+
+    if (len > 0) {
+        t->cursorX = (int) ((long long) x + (long long) len > INT32_MAX ? INT32_MAX : x + (long long) len);
+        t->cursorDirty = true;
+    }
+    return 0;
+}
+
+static int termBlit(lua_State* L) {
+    NativeTerm* t = getTerm(L);
+
+    size_t textLen, fgLen, bgLen;
+    const char* text = checkJavaString(L, 1, &textLen);
+    const char* fg = checkJavaString(L, 2, &fgLen);
+    const char* bg = checkJavaString(L, 3, &bgLen);
+    if (fgLen != textLen || bgLen != textLen) luaL_error(L, "Arguments must be the same length");
+
+    int x = t->cursorX, y = t->cursorY;
+    if (y >= 0 && y < t->height && textLen > 0) {
+        int start = x < 0 ? 0 : x;
+        long long endL = (long long) x + (long long) textLen;
+        int end = endL > t->width ? t->width : (int) endL;
+        if (start < end) {
+            size_t row = (size_t) y * t->width;
+            memcpy(t->text.data() + row + start, text + (start - x), (size_t) (end - start));
+            memcpy(t->fg.data() + row + start, fg + (start - x), (size_t) (end - start));
+            memcpy(t->bg.data() + row + start, bg + (start - x), (size_t) (end - start));
+            t->markLine(y);
+        }
+    }
+
+    if (textLen > 0) {
+        t->cursorX = (int) ((long long) x + (long long) textLen > INT32_MAX ? INT32_MAX : x + (long long) textLen);
+        t->cursorDirty = true;
+    }
+    return 0;
+}
+
+static void termFillLine(NativeTerm* t, int y) {
+    size_t row = (size_t) y * t->width;
+    memset(t->text.data() + row, ' ', (size_t) t->width);
+    memset(t->fg.data() + row, HEX_DIGITS[t->curFg], (size_t) t->width);
+    memset(t->bg.data() + row, HEX_DIGITS[t->curBg], (size_t) t->width);
+}
+
+static int termClear(lua_State* L) {
+    NativeTerm* t = getTerm(L);
+    for (int y = 0; y < t->height; y++) termFillLine(t, y);
+    t->markAllLines();
+    return 0;
+}
+
+static int termClearLine(lua_State* L) {
+    NativeTerm* t = getTerm(L);
+    int y = t->cursorY;
+    if (y >= 0 && y < t->height) {
+        termFillLine(t, y);
+        t->markLine(y);
+    }
+    return 0;
+}
+
+static int termScroll(lua_State* L) {
+    NativeTerm* t = getTerm(L);
+    int diff = checkJavaInt(L, 1);
+    if (diff == 0 || t->height == 0) return 0;
+
+    std::vector<uint8_t> newText(t->text.size()), newFg(t->fg.size()), newBg(t->bg.size());
+    for (int y = 0; y < t->height; y++) {
+        long long oldY = (long long) y + diff;
+        size_t row = (size_t) y * t->width;
+        if (oldY >= 0 && oldY < t->height) {
+            size_t oldRow = (size_t) oldY * t->width;
+            memcpy(newText.data() + row, t->text.data() + oldRow, (size_t) t->width);
+            memcpy(newFg.data() + row, t->fg.data() + oldRow, (size_t) t->width);
+            memcpy(newBg.data() + row, t->bg.data() + oldRow, (size_t) t->width);
+        } else {
+            memset(newText.data() + row, ' ', (size_t) t->width);
+            memset(newFg.data() + row, HEX_DIGITS[t->curFg], (size_t) t->width);
+            memset(newBg.data() + row, HEX_DIGITS[t->curBg], (size_t) t->width);
+        }
+    }
+    t->text.swap(newText);
+    t->fg.swap(newFg);
+    t->bg.swap(newBg);
+    t->markAllLines();
+    return 0;
+}
+
+static int termGetCursorPos(lua_State* L) {
+    NativeTerm* t = getTerm(L);
+    lua_pushinteger(L, t->cursorX + 1);
+    lua_pushinteger(L, t->cursorY + 1);
+    return 2;
+}
+
+static int termSetCursorPos(lua_State* L) {
+    NativeTerm* t = getTerm(L);
+    int x = checkJavaInt(L, 1) - 1;
+    int y = checkJavaInt(L, 2) - 1;
+    if (x != t->cursorX || y != t->cursorY) {
+        t->cursorX = x;
+        t->cursorY = y;
+        t->cursorDirty = true;
+    }
+    return 0;
+}
+
+static int termGetSize(lua_State* L) {
+    NativeTerm* t = getTerm(L);
+    lua_pushinteger(L, t->width);
+    lua_pushinteger(L, t->height);
+    return 2;
+}
+
+static int termGetCursorBlink(lua_State* L) {
+    lua_pushboolean(L, getTerm(L)->blink);
+    return 1;
+}
+
+static int termSetCursorBlink(lua_State* L) {
+    NativeTerm* t = getTerm(L);
+    bool blink = checkJavaBoolean(L, 1);
+    if (blink != t->blink) {
+        t->blink = blink;
+        t->cursorDirty = true;
+    }
+    return 0;
+}
+
+static int termGetTextColour(lua_State* L) {
+    lua_pushinteger(L, 1 << getTerm(L)->curFg);
+    return 1;
+}
+
+static int termSetTextColour(lua_State* L) {
+    NativeTerm* t = getTerm(L);
+    int colour = parseColour(L, 1);
+    if (colour != t->curFg) {
+        t->curFg = colour;
+        t->cursorDirty = true;
+    }
+    return 0;
+}
+
+static int termGetBackgroundColour(lua_State* L) {
+    lua_pushinteger(L, 1 << getTerm(L)->curBg);
+    return 1;
+}
+
+static int termSetBackgroundColour(lua_State* L) {
+    NativeTerm* t = getTerm(L);
+    int colour = parseColour(L, 1);
+    if (colour != t->curBg) {
+        t->curBg = colour;
+        t->cursorDirty = true;
+    }
+    return 0;
+}
+
+static int termIsColour(lua_State* L) {
+    lua_pushboolean(L, getTerm(L)->colour);
+    return 1;
+}
+
+static int termSetPaletteColour(lua_State* L) {
+    NativeTerm* t = getTerm(L);
+    int index = 15 - parseColour(L, 1);
+
+    double r, g, b;
+    if (lua_gettop(L) == 2) {
+        int hex = checkJavaInt(L, 2);
+        // Mirrors Palette.decodeRGB8, including its float division.
+        r = (double) ((float) ((hex >> 16) & 0xFF) / 255.0f);
+        g = (double) ((float) ((hex >> 8) & 0xFF) / 255.0f);
+        b = (double) ((float) (hex & 0xFF) / 255.0f);
+    } else {
+        r = checkJavaFiniteNumber(L, 2);
+        g = checkJavaFiniteNumber(L, 3);
+        b = checkJavaFiniteNumber(L, 4);
+    }
+
+    t->palette[index][0] = r;
+    t->palette[index][1] = g;
+    t->palette[index][2] = b;
+    t->paletteDirty = true;
+    return 0;
+}
+
+static int termGetPaletteColour(lua_State* L) {
+    NativeTerm* t = getTerm(L);
+    int index = 15 - parseColour(L, 1);
+    lua_pushnumber(L, t->palette[index][0]);
+    lua_pushnumber(L, t->palette[index][1]);
+    lua_pushnumber(L, t->palette[index][2]);
+    return 3;
+}
+
+static int termNativePaletteColour(lua_State* L) {
+    NativeTerm* t = getTerm(L);
+    int index = 15 - parseColour(L, 1);
+    lua_pushnumber(L, t->nativePalette[index][0]);
+    lua_pushnumber(L, t->nativePalette[index][1]);
+    lua_pushnumber(L, t->nativePalette[index][2]);
+    return 3;
+}
+
+static const luaL_Reg TERM_METHODS[] = {
+    { "write", termWrite },
+    { "blit", termBlit },
+    { "clear", termClear },
+    { "clearLine", termClearLine },
+    { "scroll", termScroll },
+    { "getCursorPos", termGetCursorPos },
+    { "setCursorPos", termSetCursorPos },
+    { "getSize", termGetSize },
+    { "getCursorBlink", termGetCursorBlink },
+    { "setCursorBlink", termSetCursorBlink },
+    { "getTextColour", termGetTextColour },
+    { "getTextColor", termGetTextColour },
+    { "setTextColour", termSetTextColour },
+    { "setTextColor", termSetTextColour },
+    { "getBackgroundColour", termGetBackgroundColour },
+    { "getBackgroundColor", termGetBackgroundColour },
+    { "setBackgroundColour", termSetBackgroundColour },
+    { "setBackgroundColor", termSetBackgroundColour },
+    { "isColour", termIsColour },
+    { "isColor", termIsColour },
+    { "setPaletteColour", termSetPaletteColour },
+    { "setPaletteColor", termSetPaletteColour },
+    { "getPaletteColour", termGetPaletteColour },
+    { "getPaletteColor", termGetPaletteColour },
+    { "nativePaletteColour", termNativePaletteColour },
+    { "nativePaletteColor", termNativePaletteColour },
+    { nullptr, nullptr },
+};
+
+// ---------------------------------------------------------------------------
+// Native redstone (redstone/rs API)
+// ---------------------------------------------------------------------------
+static const char* SIDE_NAMES[6] = { "bottom", "top", "back", "front", "right", "left" };
+
+static NativeRedstone* getRedstone(lua_State* L) {
+    NativeRedstone* redstone = getMachine(L)->redstone;
+    if (redstone == nullptr) luaL_error(L, "Redstone unavailable");
+    return redstone;
+}
+
+// Mirrors IArguments.getEnum(index, ComputerSide.class): a case-insensitive
+// side name.
+static int parseSide(lua_State* L, int idx) {
+    if (lua_type(L, idx) != LUA_TSTRING) {
+        luaL_error(L, "bad argument #%d (string expected, got %s)", idx, displayTypeName(L, idx));
+    }
+
+    size_t len;
+    const char* s = lua_tolstring(L, idx, &len);
+    if (len <= 6) {
+        char lower[8];
+        for (size_t i = 0; i < len; i++) lower[i] = (char) tolower((unsigned char) s[i]);
+        lower[len] = '\0';
+        for (int i = 0; i < 6; i++) {
+            if (strcmp(lower, SIDE_NAMES[i]) == 0) return i;
+        }
+    }
+    luaL_error(L, "bad argument #%d (unknown option %s)", idx, s);
+    return 0; // unreachable
+}
+
+static int rsGetSides(lua_State* L) {
+    lua_createtable(L, 6, 0);
+    for (int i = 0; i < 6; i++) {
+        lua_pushstring(L, SIDE_NAMES[i]);
+        lua_rawseti(L, -2, i + 1);
+    }
+    return 1;
+}
+
+static int rsGetInput(lua_State* L) {
+    NativeRedstone* r = getRedstone(L);
+    lua_pushboolean(L, r->input[parseSide(L, 1)] > 0);
+    return 1;
+}
+
+static int rsGetAnalogInput(lua_State* L) {
+    NativeRedstone* r = getRedstone(L);
+    lua_pushinteger(L, r->input[parseSide(L, 1)]);
+    return 1;
+}
+
+static int rsGetOutput(lua_State* L) {
+    NativeRedstone* r = getRedstone(L);
+    lua_pushboolean(L, r->output[parseSide(L, 1)] > 0);
+    return 1;
+}
+
+static int rsGetAnalogOutput(lua_State* L) {
+    NativeRedstone* r = getRedstone(L);
+    lua_pushinteger(L, r->output[parseSide(L, 1)]);
+    return 1;
+}
+
+static int rsSetOutput(lua_State* L) {
+    NativeRedstone* r = getRedstone(L);
+    int side = parseSide(L, 1);
+    int value = checkJavaBoolean(L, 2) ? 15 : 0;
+    if (r->output[side] != value) {
+        r->output[side] = value;
+        r->outputDirty = true;
+    }
+    return 0;
+}
+
+static int rsSetAnalogOutput(lua_State* L) {
+    NativeRedstone* r = getRedstone(L);
+    int side = parseSide(L, 1);
+    int value = checkJavaInt(L, 2);
+    if (value < 0 || value > 15) luaL_error(L, "Expected number in range 0-15");
+    if (r->output[side] != value) {
+        r->output[side] = value;
+        r->outputDirty = true;
+    }
+    return 0;
+}
+
+static int rsGetBundledInput(lua_State* L) {
+    NativeRedstone* r = getRedstone(L);
+    lua_pushinteger(L, r->bundledInput[parseSide(L, 1)]);
+    return 1;
+}
+
+static int rsGetBundledOutput(lua_State* L) {
+    NativeRedstone* r = getRedstone(L);
+    lua_pushinteger(L, r->bundledOutput[parseSide(L, 1)]);
+    return 1;
+}
+
+static int rsSetBundledOutput(lua_State* L) {
+    NativeRedstone* r = getRedstone(L);
+    int side = parseSide(L, 1);
+    int value = checkJavaInt(L, 2);
+    if (r->bundledOutput[side] != value) {
+        r->bundledOutput[side] = value;
+        r->outputDirty = true;
+    }
+    return 0;
+}
+
+static int rsTestBundledInput(lua_State* L) {
+    NativeRedstone* r = getRedstone(L);
+    int side = parseSide(L, 1);
+    int mask = checkJavaInt(L, 2);
+    lua_pushboolean(L, (r->bundledInput[side] & mask) == mask);
+    return 1;
+}
+
+static const luaL_Reg REDSTONE_METHODS[] = {
+    { "getSides", rsGetSides },
+    { "getInput", rsGetInput },
+    { "getAnalogInput", rsGetAnalogInput },
+    { "getAnalogueInput", rsGetAnalogInput },
+    { "getOutput", rsGetOutput },
+    { "getAnalogOutput", rsGetAnalogOutput },
+    { "getAnalogueOutput", rsGetAnalogOutput },
+    { "setOutput", rsSetOutput },
+    { "setAnalogOutput", rsSetAnalogOutput },
+    { "setAnalogueOutput", rsSetAnalogOutput },
+    { "getBundledInput", rsGetBundledInput },
+    { "getBundledOutput", rsGetBundledOutput },
+    { "setBundledOutput", rsSetBundledOutput },
+    { "testBundledInput", rsTestBundledInput },
+    { nullptr, nullptr },
+};
+
+// ---------------------------------------------------------------------------
+// Native os time functions
+// ---------------------------------------------------------------------------
+
+// Call the original Java-backed function (stored as upvalue 1) with our
+// arguments. Only used for functions which never yield.
+static int osFallback(lua_State* L) {
+    int nargs = lua_gettop(L);
+    lua_pushvalue(L, lua_upvalueindex(1));
+    lua_insert(L, 1);
+    lua_call(L, nargs, LUA_MULTRET);
+    return lua_gettop(L);
+}
+
+// Determine which locale is requested: 0 = fallback to Java (ingame/table/
+// none), 1 = utc, 2 = local. Raises on unsupported locale strings.
+static int osLocale(lua_State* L) {
+    if (lua_isnoneornil(L, 1)) return 0;
+    if (lua_type(L, 1) != LUA_TSTRING) return 0; // Let Java produce the error/table handling.
+
+    size_t len;
+    const char* s = lua_tolstring(L, 1, &len);
+    char lower[8];
+    if (len < sizeof(lower)) {
+        for (size_t i = 0; i < len; i++) lower[i] = (char) tolower((unsigned char) s[i]);
+        lower[len] = '\0';
+        if (strcmp(lower, "utc") == 0) return 1;
+        if (strcmp(lower, "local") == 0) return 2;
+        if (strcmp(lower, "ingame") == 0) return 0;
+    }
+    luaL_error(L, "Unsupported operation");
+    return 0; // unreachable
+}
+
+static int64_t systemMillis() {
+    return (int64_t) std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+}
+
+static void brokenDownTime(bool utc, struct tm* out) {
+    time_t now = time(nullptr);
+#ifdef _WIN32
+    if (utc) gmtime_s(out, &now); else localtime_s(out, &now);
+#else
+    if (utc) gmtime_r(&now, out); else localtime_r(&now, out);
+#endif
+}
+
+static int osEpoch(lua_State* L) {
+    int locale = osLocale(L);
+    if (locale == 0) return osFallback(L);
+    // Note: Java's Calendar.getTimeInMillis() is timezone-independent, so
+    // "utc" and "local" both return the UTC epoch. We match that.
+    lua_pushnumber(L, (double) systemMillis());
+    return 1;
+}
+
+static int osTime(lua_State* L) {
+    int locale = osLocale(L);
+    if (locale == 0) return osFallback(L);
+
+    struct tm t;
+    brokenDownTime(locale == 1, &t);
+    // Mirror Java's float arithmetic.
+    float result = (float) t.tm_hour;
+    result += t.tm_min / 60.0f;
+    result += t.tm_sec / (60.0f * 60.0f);
+    lua_pushnumber(L, (double) result);
+    return 1;
+}
+
+static int osDay(lua_State* L) {
+    int locale = osLocale(L);
+    if (locale == 0) return osFallback(L);
+
+    struct tm t;
+    brokenDownTime(locale == 1, &t);
+    // Mirrors OSAPI.getDayForCalendar: whole years since 1970 plus the
+    // (1-based) day of the year.
+    int year = t.tm_year + 1900;
+    int day = 0;
+    for (int y = 1970; y < year; y++) {
+        bool leap = y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
+        day += leap ? 366 : 365;
+    }
+    day += t.tm_yday + 1;
+    lua_pushinteger(L, day);
+    return 1;
+}
+
+// ---------------------------------------------------------------------------
 // Interrupt handling
 // ---------------------------------------------------------------------------
 static void interruptCallback(lua_State* L, int gc) {
     if (gc >= 0) return; // Don't interrupt during GC.
 
     MachineState* m = getMachine(L);
+
+    // Periodically flush native terminal/redstone changes to Java, so
+    // long-running code which draws without yielding still updates the world.
+    if (m->anyStateDirty()) {
+        NativeTerm* term = m->term;
+        double now = lua_clock();
+        double last = term != nullptr ? term->lastSync : 0;
+        if (now - last > 0.05) {
+            if (term != nullptr) term->lastSync = now;
+            JNIEnv* env = getEnv(m);
+            if (env != nullptr) {
+                env->CallVoidMethod(m->machine, g_syncTermMethod);
+                if (env->ExceptionCheck()) env->ExceptionClear();
+            }
+        }
+    }
+
     int flags = m->flags.load(std::memory_order_relaxed);
     if (flags == 0) return;
 
+    // lua_break raises an error when the thread cannot yield (e.g. inside a
+    // metamethod), so only break at yieldable safepoints; otherwise we try
+    // again at the next one.
     if (flags & FLAG_HARD_ABORT) {
-        lua_break(L);
+        if (lua_isyieldable(L)) {
+            recordBreakLeaf(m, L);
+            lua_break(L);
+        }
         return;
     }
     if (flags & FLAG_SOFT_ABORT) {
@@ -737,7 +1436,8 @@ static void interruptCallback(lua_State* L, int gc) {
             }
         }
     }
-    if (flags & FLAG_PAUSE) {
+    if ((flags & FLAG_PAUSE) && lua_isyieldable(L)) {
+        recordBreakLeaf(m, L);
         lua_break(L);
     }
 }
@@ -759,9 +1459,10 @@ JNIEXPORT jlong JNICALL Java_dan200_computercraft_core_lua_luau_LuauNative_creat
         g_invokeFastMethod = env->GetMethodID(cls, "invokeFast", "(IIJI)I");
         g_resumeFastMethod = env->GetMethodID(cls, "resumeFast", "(JI)I");
         g_takeLargeMethod = env->GetMethodID(cls, "takeLargeResponse", "()[B");
+        g_syncTermMethod = env->GetMethodID(cls, "syncTermNow", "()V");
         env->DeleteLocalRef(cls);
         if (g_invokeMethod == nullptr || g_resumeMethod == nullptr || g_invokeFastMethod == nullptr
-            || g_resumeFastMethod == nullptr || g_takeLargeMethod == nullptr) {
+            || g_resumeFastMethod == nullptr || g_takeLargeMethod == nullptr || g_syncTermMethod == nullptr) {
             env->DeleteGlobalRef(m->machine);
             delete m;
             return 0;
@@ -790,6 +1491,7 @@ JNIEXPORT jlong JNICALL Java_dan200_computercraft_core_lua_luau_LuauNative_creat
     lua_Callbacks* cb = lua_callbacks(L);
     cb->userdata = m;
     cb->interrupt = interruptCallback;
+    cb->debuginterrupt = debugInterruptCallback;
 
     luaL_openlibs(L);
 
@@ -817,6 +1519,8 @@ JNIEXPORT void JNICALL Java_dan200_computercraft_core_lua_luau_LuauNative_closeS
     if (m->fastRespRef != nullptr) env->DeleteGlobalRef(m->fastRespRef);
     free(m->fastArgs);
     free(m->fastResp);
+    delete m->term;
+    delete m->redstone;
     delete m;
 }
 
@@ -911,36 +1615,56 @@ JNIEXPORT jbyteArray JNICALL Java_dan200_computercraft_core_lua_luau_LuauNative_
     auto* m = reinterpret_cast<MachineState*>((uintptr_t) ptr);
     lua_State* thread = reinterpret_cast<lua_State*>((uintptr_t) threadPtr);
 
-    int nargs = 0;
-    if (argsArr != nullptr) {
-        jsize argsLen = env->GetArrayLength(argsArr);
-        std::vector<uint8_t> args((size_t) argsLen);
-        env->GetByteArrayRegion(argsArr, 0, argsLen, reinterpret_cast<jbyte*>(args.data()));
+    int status;
+    if (argsArr == nullptr && !m->breakChain.empty()) {
+        // Continuing from a pause break. Resume the innermost suspended thread
+        // first, then unwind outwards: each parent's coresumecont only makes
+        // progress once its child is no longer LUA_BREAK.
+        status = LUA_BREAK;
+        while (!m->breakChain.empty()) {
+            lua_State* current = m->breakChain.front();
+            status = lua_resume(current, nullptr, 0);
+            if (status == LUA_BREAK) break; // Broke again; keep the remaining chain.
+            m->breakChain.erase(m->breakChain.begin());
+        }
+        // When the chain fully drains, the last thread resumed is the main
+        // thread, whose stack now holds the yield/return values read below.
+    } else {
+        // A fresh event (or a break with no chain): fully unwind and resume the
+        // main thread with the decoded arguments.
+        m->breakChain.clear();
 
-        // Decode the arguments on the (idle) main state - it is not legal to
-        // run code on a suspended coroutine's stack - then move them across.
-        lua_State* host = m->L;
-        Reader r(args.data(), args.size());
-        int base = lua_gettop(host);
-        lua_pushcfunction(host, protectedDecode, nullptr);
-        lua_pushlightuserdata(host, &r);
-        if (lua_pcall(host, 1, LUA_MULTRET, 0) != 0) {
-            lua_settop(host, base);
-            // Malformed arguments: resume with none rather than crash.
-        } else {
-            nargs = lua_gettop(host) - base;
-            if (nargs > 0) {
-                if (lua_checkstack(thread, nargs + 1)) {
-                    lua_xmove(host, thread, nargs);
-                } else {
-                    lua_settop(host, base);
-                    nargs = 0;
+        int nargs = 0;
+        if (argsArr != nullptr) {
+            jsize argsLen = env->GetArrayLength(argsArr);
+            std::vector<uint8_t> args((size_t) argsLen);
+            env->GetByteArrayRegion(argsArr, 0, argsLen, reinterpret_cast<jbyte*>(args.data()));
+
+            // Decode the arguments on the (idle) main state - it is not legal
+            // to run code on a suspended coroutine's stack - then move across.
+            lua_State* host = m->L;
+            Reader r(args.data(), args.size());
+            int base = lua_gettop(host);
+            lua_pushcfunction(host, protectedDecode, nullptr);
+            lua_pushlightuserdata(host, &r);
+            if (lua_pcall(host, 1, LUA_MULTRET, 0) != 0) {
+                lua_settop(host, base);
+                // Malformed arguments: resume with none rather than crash.
+            } else {
+                nargs = lua_gettop(host) - base;
+                if (nargs > 0) {
+                    if (lua_checkstack(thread, nargs + 1)) {
+                        lua_xmove(host, thread, nargs);
+                    } else {
+                        lua_settop(host, base);
+                        nargs = 0;
+                    }
                 }
             }
         }
-    }
 
-    int status = lua_resume(thread, nullptr, nargs);
+        status = lua_resume(thread, nullptr, nargs);
+    }
 
     Writer w;
     switch (status) {
@@ -985,6 +1709,218 @@ JNIEXPORT jbyteArray JNICALL Java_dan200_computercraft_core_lua_luau_LuauNative_
 JNIEXPORT jstring JNICALL Java_dan200_computercraft_core_lua_luau_LuauNative_debugTrace(JNIEnv* env, jclass, jlong threadPtr) {
     lua_State* thread = reinterpret_cast<lua_State*>((uintptr_t) threadPtr);
     return env->NewStringUTF(lua_debugtrace(thread));
+}
+
+// Set the native terminal's dimensions and contents from the Java Terminal
+// (the authority at init/resize time). text/fg/bg are height*width blobs.
+static void termLoadContent(JNIEnv* env, NativeTerm* term, jint width, jint height, jbyteArray text, jbyteArray fg, jbyteArray bg) {
+    term->width = width;
+    term->height = height;
+    size_t size = (size_t) width * height;
+    term->text.assign(size, ' ');
+    term->fg.assign(size, '0');
+    term->bg.assign(size, 'f');
+    term->lineDirty.assign((size_t) height, 0);
+    term->cursorDirty = false;
+    term->paletteDirty = false;
+    term->anyLineDirty = false;
+
+    if ((size_t) env->GetArrayLength(text) >= size && (size_t) env->GetArrayLength(fg) >= size
+        && (size_t) env->GetArrayLength(bg) >= size && size > 0) {
+        env->GetByteArrayRegion(text, 0, (jsize) size, reinterpret_cast<jbyte*>(term->text.data()));
+        env->GetByteArrayRegion(fg, 0, (jsize) size, reinterpret_cast<jbyte*>(term->fg.data()));
+        env->GetByteArrayRegion(bg, 0, (jsize) size, reinterpret_cast<jbyte*>(term->bg.data()));
+    }
+}
+
+// Create the native terminal and install the "term" global. palette and
+// nativePalette are 48 doubles (16 x rgb), indexed by palette index.
+JNIEXPORT void JNICALL Java_dan200_computercraft_core_lua_luau_LuauNative_initTerm(
+    JNIEnv* env, jclass, jlong ptr, jint width, jint height, jboolean colour,
+    jint cursorX, jint cursorY, jint curFg, jint curBg, jboolean blink,
+    jdoubleArray palette, jdoubleArray nativePalette,
+    jbyteArray text, jbyteArray fg, jbyteArray bg
+) {
+    auto* m = reinterpret_cast<MachineState*>((uintptr_t) ptr);
+    lua_State* L = m->L;
+
+    if (m->term == nullptr) m->term = new NativeTerm();
+    NativeTerm* term = m->term;
+    term->colour = colour;
+    term->cursorX = cursorX;
+    term->cursorY = cursorY;
+    term->curFg = curFg;
+    term->curBg = curBg;
+    term->blink = blink;
+
+    if (env->GetArrayLength(palette) >= 48) {
+        env->GetDoubleArrayRegion(palette, 0, 48, &term->palette[0][0]);
+    }
+    if (env->GetArrayLength(nativePalette) >= 48) {
+        env->GetDoubleArrayRegion(nativePalette, 0, 48, &term->nativePalette[0][0]);
+    }
+
+    termLoadContent(env, term, width, height, text, fg, bg);
+
+    // Install the term global.
+    lua_createtable(L, 0, 26);
+    for (const luaL_Reg* reg = TERM_METHODS; reg->name != nullptr; reg++) {
+        lua_pushcfunction(L, reg->func, reg->name);
+        lua_setfield(L, -2, reg->name);
+    }
+    lua_setglobal(L, "term");
+}
+
+// Refresh the native terminal's size/contents from Java (used on resize).
+JNIEXPORT void JNICALL Java_dan200_computercraft_core_lua_luau_LuauNative_termSetContent(
+    JNIEnv* env, jclass, jlong ptr, jint width, jint height, jbyteArray text, jbyteArray fg, jbyteArray bg
+) {
+    auto* m = reinterpret_cast<MachineState*>((uintptr_t) ptr);
+    if (m->term == nullptr) return;
+    termLoadContent(env, m->term, width, height, text, fg, bg);
+}
+
+// Encode the terminal's dirty state into the response buffer, clearing the
+// dirty flags. Returns the encoded length (0 = nothing to sync).
+//
+// Format: u8 flags (1 = cursor, 2 = palette, 4 = lines);
+//   cursor: i32 x, i32 y, i32 fg, i32 bg, u8 blink
+//   palette: 48 f64
+//   lines: i32 count, then per line: i32 y, width bytes text, width fg, width bg
+JNIEXPORT jint JNICALL Java_dan200_computercraft_core_lua_luau_LuauNative_syncTerm(JNIEnv*, jclass, jlong ptr) {
+    auto* m = reinterpret_cast<MachineState*>((uintptr_t) ptr);
+    if (!m->anyStateDirty()) return 0;
+
+    static NativeTerm emptyTerm;
+    NativeTerm* term = m->term != nullptr ? m->term : &emptyTerm;
+    NativeRedstone* redstone = m->redstone;
+
+    FixedWriter w(m->fastResp, FAST_BUFFER_SIZE);
+    uint8_t flags = 0;
+    if (term->cursorDirty) flags |= 1;
+    if (term->paletteDirty) flags |= 2;
+    if (term->anyLineDirty) flags |= 4;
+    if (redstone != nullptr && redstone->outputDirty) flags |= 8;
+    w.u8(flags);
+
+    if (term->cursorDirty) {
+        w.i32(term->cursorX);
+        w.i32(term->cursorY);
+        w.i32(term->curFg);
+        w.i32(term->curBg);
+        w.u8(term->blink ? 1 : 0);
+    }
+
+    if (term->paletteDirty) {
+        w.bytes(&term->palette[0][0], 48 * sizeof(double));
+    }
+
+    if (term->anyLineDirty) {
+        int count = 0;
+        for (int y = 0; y < term->height; y++) {
+            if (term->lineDirty[y]) count++;
+        }
+        w.i32(count);
+        for (int y = 0; y < term->height; y++) {
+            if (!term->lineDirty[y]) continue;
+            size_t row = (size_t) y * term->width;
+            w.i32(y);
+            w.bytes(term->text.data() + row, (size_t) term->width);
+            w.bytes(term->fg.data() + row, (size_t) term->width);
+            w.bytes(term->bg.data() + row, (size_t) term->width);
+        }
+    }
+
+    if ((flags & 8) != 0) {
+        for (int i = 0; i < 6; i++) w.i32(redstone->output[i]);
+        for (int i = 0; i < 6; i++) w.i32(redstone->bundledOutput[i]);
+    }
+
+    if (w.overflow) {
+        // Should not happen for any reasonable terminal size; leave dirty and
+        // report nothing rather than send a corrupt delta.
+        return 0;
+    }
+
+    term->cursorDirty = false;
+    term->paletteDirty = false;
+    term->anyLineDirty = false;
+    std::fill(term->lineDirty.begin(), term->lineDirty.end(), 0);
+    if (redstone != nullptr) redstone->outputDirty = false;
+    return (jint) w.pos;
+}
+
+// Create the native redstone mirror and install the "redstone"/"rs" globals.
+// inputs and outputs are 12 ints: 6 analog levels then 6 bundled masks.
+JNIEXPORT void JNICALL Java_dan200_computercraft_core_lua_luau_LuauNative_installRedstone(
+    JNIEnv* env, jclass, jlong ptr, jintArray inputs, jintArray outputs
+) {
+    auto* m = reinterpret_cast<MachineState*>((uintptr_t) ptr);
+    lua_State* L = m->L;
+
+    if (m->redstone == nullptr) m->redstone = new NativeRedstone();
+    NativeRedstone* redstone = m->redstone;
+
+    jint values[12];
+    if (env->GetArrayLength(inputs) >= 12) {
+        env->GetIntArrayRegion(inputs, 0, 12, values);
+        for (int i = 0; i < 6; i++) redstone->input[i] = values[i];
+        for (int i = 0; i < 6; i++) redstone->bundledInput[i] = values[6 + i];
+    }
+    if (env->GetArrayLength(outputs) >= 12) {
+        env->GetIntArrayRegion(outputs, 0, 12, values);
+        for (int i = 0; i < 6; i++) redstone->output[i] = values[i];
+        for (int i = 0; i < 6; i++) redstone->bundledOutput[i] = values[6 + i];
+    }
+
+    lua_createtable(L, 0, 14);
+    for (const luaL_Reg* reg = REDSTONE_METHODS; reg->name != nullptr; reg++) {
+        lua_pushcfunction(L, reg->func, reg->name);
+        lua_setfield(L, -2, reg->name);
+    }
+    lua_pushvalue(L, -1);
+    lua_setglobal(L, "redstone");
+    lua_setglobal(L, "rs");
+}
+
+// Update the native redstone input mirror (6 analog levels + 6 bundled masks).
+JNIEXPORT void JNICALL Java_dan200_computercraft_core_lua_luau_LuauNative_setRedstoneInput(JNIEnv* env, jclass, jlong ptr, jintArray inputs) {
+    auto* m = reinterpret_cast<MachineState*>((uintptr_t) ptr);
+    if (m->redstone == nullptr || env->GetArrayLength(inputs) < 12) return;
+
+    jint values[12];
+    env->GetIntArrayRegion(inputs, 0, 12, values);
+    for (int i = 0; i < 6; i++) m->redstone->input[i] = values[i];
+    for (int i = 0; i < 6; i++) m->redstone->bundledInput[i] = values[6 + i];
+}
+
+// Wrap os.epoch/os.time/os.day with native implementations for the utc/local
+// locales, keeping the original Java-backed functions as fallbacks.
+JNIEXPORT void JNICALL Java_dan200_computercraft_core_lua_luau_LuauNative_installFastOs(JNIEnv*, jclass, jlong ptr) {
+    auto* m = reinterpret_cast<MachineState*>((uintptr_t) ptr);
+    lua_State* L = m->L;
+
+    lua_getglobal(L, "os");
+    if (!lua_istable(L, -1)) {
+        lua_pop(L, 1);
+        return;
+    }
+
+    const struct { const char* name; lua_CFunction fn; } wrappers[] = {
+        { "epoch", osEpoch },
+        { "time", osTime },
+        { "day", osDay },
+    };
+    for (const auto& wrapper : wrappers) {
+        lua_getfield(L, -1, wrapper.name);
+        if (lua_isfunction(L, -1)) {
+            lua_pushcclosure(L, wrapper.fn, wrapper.name, 1); // Original function becomes upvalue 1.
+            lua_setfield(L, -2, wrapper.name);
+        } else {
+            lua_pop(L, 1);
+        }
+    }
+    lua_pop(L, 1);
 }
 
 } // extern "C"

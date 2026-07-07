@@ -19,6 +19,15 @@ public class RedstoneMethods {
     }
 
     /**
+     * Get the underlying redstone state. This is used by the Luau runtime, which implements the redstone API natively.
+     *
+     * @return The underlying redstone access.
+     */
+    public RedstoneAccess redstoneAccess() {
+        return redstone;
+    }
+
+    /**
      * Turn the redstone signal of a specific side on or off.
      *
      * @param side The side to set.
