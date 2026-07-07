@@ -413,6 +413,11 @@ function expect.error(fun, ...)
         res = res:sub(#line + 1)
     elseif res:sub(1, 7) == "pcall: " then
         res = res:sub(8)
+    elseif _VERSION == "Luau" then
+        -- Luau does not eliminate tail calls, so level-based errors from ROM
+        -- helper functions are attributed to the delegating ROM function
+        -- rather than our caller. Strip that prefix.
+        res = res:gsub("^/?rom/[^:]+:%d+: ", "", 1)
     end
     return setmetatable({ value = res }, expect_mt)
 end

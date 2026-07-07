@@ -74,3 +74,19 @@ the generated documentation [can be browsed online](https://tweaked.cc/javadoc/)
 [GitHub Discussions]: https://github.com/cc-tweaked/CC-Tweaked/discussions
 [EsperNet]: https://www.esper.net/
 [KiwiIRC]: https://kiwiirc.com/nextclient/#irc://irc.esper.net:+6697/#computercraft "#computercraft on EsperNet"
+
+## Performance improvements
+Computers now run on the native [Luau](https://luau.org/) VM instead of the Cobalt runtime. Benchmark of identical workloads on both runtimes (lower is better):
+
+| Benchmark                             | Luau (new) | Cobalt (old) | Change      |
+|---------------------------------------|-----------:|-------------:|-------------|
+| Numeric loop (50M iterations)         |     555 ms |      5151 ms | 9.3x faster |
+| Coroutine switching (500k resumes)    |      44 ms |      1018 ms | 23x faster  |
+| Function calls (fib 30)               |      79 ms |       514 ms | 6.5x faster |
+| Table (array) reads/writes            |      48 ms |       335 ms | 7.0x faster |
+| Table (hash) writes                   |     120 ms |       655 ms | 5.5x faster |
+| String format/upper/gsub              |      54 ms |       206 ms | 3.8x faster |
+| Pattern matching (gmatch)             |    1432 ms |      2700 ms | 1.9x faster |
+| String concatenation                  |      64 ms |        88 ms | 1.4x faster |
+| Java API calls (200k x os.epoch)      |     263 ms |       210 ms | 1.3x slower |
+| Terminal redraw (100k term calls)     |      87 ms |        59 ms | 1.5x slower |

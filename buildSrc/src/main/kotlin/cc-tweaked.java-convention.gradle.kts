@@ -170,6 +170,13 @@ tasks.test {
     testLogging {
         events("skipped", "failed")
     }
+
+    // Forward the Lua machine selection (cobalt/luau) and test skip keywords
+    // to the test JVM.
+    for (property in listOf("cc.lua.machine", "cc.skip_keywords", "cc.benchmark")) {
+        val value = System.getProperty(property)
+        if (value != null) systemProperty(property, value)
+    }
 }
 
 tasks.withType(JacocoReport::class.java).configureEach {

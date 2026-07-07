@@ -59,7 +59,7 @@ local function make_searchpath(dir)
         sep = expect(3, sep, "string", "nil") or "."
         rep = expect(4, rep, "string", "nil") or "/"
 
-        local fname = string.gsub(name, sep:gsub("%.", "%%%."), rep)
+        local fname = string.gsub(name, sep:gsub("%.", "%%."), rep)
         local sError = ""
         for pattern in string.gmatch(path, "[^;]+") do
             local sPath = string.gsub(pattern, "%?", fname)
@@ -131,12 +131,31 @@ local function make_package(env, dir)
     --
     -- This table is an internal implementation detail - it is NOT intended to
     -- be extended by user code.
-    local registry = debug.getregistry()
+    --
+    -- On the Cobalt runtime this lives in the registry's _LOADED table. On the
+    -- Luau runtime (which has no debug.getregistry) native modules are instead
+    -- exposed via the _CC_NATIVE_MODULES global.
+    local registry = debug.getregistry and debug.getregistry()
     if registry and type(registry._LOADED) == "table" then
         for k, v in next, registry._LOADED do
             if type(k) == "string" then
                 package.loaded[k] = v
             end
+        end
+    end
+
+    if type(_CC_NATIVE_MODULES) == "table" then
+        for k, v in next, _CC_NATIVE_MODULES do
+            if type(k) == "string" then
+                package.loaded[k] = v
+            end
+        end
+    end
+
+    if not (debug and debug.getregistry) then
+        -- With no registry to copy from, seed the standard libraries directly.
+        for _, k in ipairs { "bit32", "coroutine", "debug", "math", "os", "string", "table", "utf8" } do
+            if package.loaded[k] == nil and type(_G[k]) == "table" then package.loaded[k] = _G[k] end
         end
     end
 

@@ -73,10 +73,14 @@ describe("cc.require", function()
         it("fails on syntax errors", function()
             local require = get("?.lua")
             setup("test-files/modules/some_module.lua", "1")
+            -- The exact syntax error message depends on the runtime's compiler.
+            local syntax_error = _VERSION == "Luau"
+                and "  [^:]*some_module.lua:1: .*$"
+                or "  [^:]*some_module.lua:1: unexpected symbol near '1'$"
             expect.error(require, "some_module"):str_match(
                 "^module 'some_module' not found:\n" ..
                 "  no field package.preload%['some_module'%]\n" ..
-                "  [^:]*some_module.lua:1: unexpected symbol near '1'$"
+                syntax_error
             )
         end)
     end)

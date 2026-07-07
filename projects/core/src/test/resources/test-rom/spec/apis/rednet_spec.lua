@@ -184,7 +184,7 @@ describe("The rednet library", function()
                 fake_computer.run_all(computers)
             end)
 
-            it("cancels the pending timer", function()
+            it("cancels the pending timer :cobalt_debug", function()
                 local computer = computer_with_rednet(1, function(rednet)
                     -- Send a message to ourselves with a timer
                     rednet.send(1, "hello")
@@ -236,7 +236,7 @@ describe("The rednet library", function()
             fake_computer.run_all({ computer_1, computer_2, computer_3 }, { computer_1, computer_3 })
         end)
 
-        it("ignores duplicate messages", function()
+        it("ignores duplicate messages :cobalt_debug", function()
             local computer_1, modem_1 = computer_with_rednet(1, function(rednet)
                 rednet.send(2, "Hello")
             end, { open = true })

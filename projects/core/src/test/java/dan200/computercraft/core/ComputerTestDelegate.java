@@ -16,8 +16,10 @@ import dan200.computercraft.core.computer.ComputerSide;
 import dan200.computercraft.core.filesystem.FileSystemException;
 import dan200.computercraft.core.filesystem.WritableFileMount;
 import dan200.computercraft.core.lua.CobaltLuaMachine;
+import dan200.computercraft.core.lua.ILuaMachine;
 import dan200.computercraft.core.lua.MachineEnvironment;
 import dan200.computercraft.core.lua.MachineException;
+import dan200.computercraft.core.lua.luau.LuauMachine;
 import dan200.computercraft.core.terminal.Terminal;
 import dan200.computercraft.test.core.computer.BasicEnvironment;
 import it.unimi.dsi.fastutil.ints.Int2IntArrayMap;
@@ -112,7 +114,7 @@ public class ComputerTestDelegate {
         }
 
         var environment = new BasicEnvironment(mount);
-        context = ComputerContext.builder(environment).luaFactory(CoverageLuaMachine::new).build();
+        context = ComputerContext.builder(environment).luaFactory(machineFactory()).build();
         computer = new Computer(context, environment, term, 0);
         computer.getEnvironment().setPeripheral(ComputerSide.TOP, new FakeModem());
         computer.getEnvironment().setPeripheral(ComputerSide.BOTTOM, new FakePeripheralHub());
@@ -464,6 +466,18 @@ public class ComputerTestDelegate {
                 lock.unlock();
             }
         }
+    }
+
+    /**
+     * Pick the {@link ILuaMachine.Factory} to run tests against. This is chosen with the {@code cc.lua.machine}
+     * system property: the Luau runtime when set to {@code luau}, and Cobalt (with coverage tracking) otherwise.
+     */
+    private ILuaMachine.Factory machineFactory() {
+        var machine = System.getProperty("cc.lua.machine", System.getenv().getOrDefault("CC_LUA_MACHINE", "cobalt"));
+        return switch (machine) {
+            case "luau" -> LuauMachine::new;
+            default -> CoverageLuaMachine::new;
+        };
     }
 
     /**

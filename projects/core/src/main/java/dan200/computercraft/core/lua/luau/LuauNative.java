@@ -1,0 +1,187 @@
+// SPDX-FileCopyrightText: 2026 The CC: Tweaked Developers
+//
+// SPDX-License-Identifier: MPL-2.0
+
+package dan200.computercraft.core.lua.luau;
+
+import org.jspecify.annotations.Nullable;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.util.Locale;
+
+/**
+ * JNI bindings to the {@code ccluau} native library, which embeds the Luau VM and compiler.
+ * <p>
+ * The native library is loaded from the {@code cc.luau.native} system property if set, and otherwise extracted from
+ * the {@code lib/ccluau/} classpath resources for the current platform.
+ *
+ * @see LuauMachine
+ */
+final class LuauNative {
+    private static final Logger LOG = LoggerFactory.getLogger(LuauNative.class);
+
+    static final int FLAG_SOFT_ABORT = 1;
+    static final int FLAG_HARD_ABORT = 2;
+    static final int FLAG_PAUSE = 4;
+
+    static final byte RESUME_DEAD = 0;
+    static final byte RESUME_YIELD = 1;
+    static final byte RESUME_BREAK = 2;
+    static final byte RESUME_ERROR = 3;
+
+    private static volatile @Nullable Boolean loaded;
+
+    private LuauNative() {
+    }
+
+    /**
+     * Attempt to load the native library, returning whether it is available on this platform.
+     *
+     * @return Whether the Luau runtime can be used.
+     */
+    static boolean isAvailable() {
+        var state = loaded;
+        if (state != null) return state;
+
+        synchronized (LuauNative.class) {
+            state = loaded;
+            if (state != null) return state;
+
+            try {
+                load();
+                loaded = true;
+                return true;
+            } catch (Throwable e) {
+                LOG.warn("Cannot load the Luau native library. Computers will fall back to the Cobalt runtime.", e);
+                loaded = false;
+                return false;
+            }
+        }
+    }
+
+    private static void load() throws IOException {
+        var override = System.getProperty("cc.luau.native");
+        if (override != null) {
+            System.load(Path.of(override).toAbsolutePath().toString());
+            return;
+        }
+
+        var resource = "lib/ccluau/" + platform() + "/" + libraryName();
+        var url = LuauNative.class.getClassLoader().getResource(resource);
+        if (url == null) throw new IOException("No such resource " + resource);
+
+        // System.load requires an on-disk path, so extract the library to a temporary file.
+        var temp = Files.createTempFile("ccluau", libraryName());
+        temp.toFile().deleteOnExit();
+        try (var stream = url.openStream()) {
+            Files.copy(stream, temp, StandardCopyOption.REPLACE_EXISTING);
+        }
+        System.load(temp.toAbsolutePath().toString());
+    }
+
+    private static String platform() {
+        var os = System.getProperty("os.name").toLowerCase(Locale.ROOT);
+        var arch = System.getProperty("os.arch").toLowerCase(Locale.ROOT);
+
+        String osName;
+        if (os.contains("win")) {
+            osName = "windows";
+        } else if (os.contains("mac") || os.contains("darwin")) {
+            osName = "macos";
+        } else {
+            osName = "linux";
+        }
+
+        var archName = switch (arch) {
+            case "amd64", "x86_64" -> "x86_64";
+            case "aarch64", "arm64" -> "arm64";
+            default -> arch;
+        };
+
+        return osName + "-" + archName;
+    }
+
+    private static String libraryName() {
+        var os = System.getProperty("os.name").toLowerCase(Locale.ROOT);
+        if (os.contains("win")) return "ccluau.dll";
+        if (os.contains("mac") || os.contains("darwin")) return "libccluau.dylib";
+        return "libccluau.so";
+    }
+
+    /**
+     * Create a new Luau state. The returned pointer must be freed with {@link #closeState(long)}.
+     *
+     * @param machine The machine to dispatch {@code invoke}/{@code resumeCallback} calls to.
+     * @return An opaque pointer to the native machine state, or 0 on failure.
+     */
+    static native long createState(LuauMachine machine);
+
+    /**
+     * Destroy a state created with {@link #createState(LuauMachine)}. Must not be called while a
+     * {@link #resume(long, long, byte[])} is in progress.
+     *
+     * @param state The state to destroy.
+     */
+    static native void closeState(long state);
+
+    /**
+     * Get one of the shared direct buffers used for the fast call path.
+     *
+     * @param state The current state.
+     * @param args  {@code true} for the argument buffer, {@code false} for the response buffer.
+     * @return The shared buffer.
+     */
+    static native java.nio.ByteBuffer getBuffer(long state, boolean args);
+
+    /**
+     * Update the interrupt flags for a state. Safe to call from any thread.
+     *
+     * @param state The current state.
+     * @param flags A combination of {@code FLAG_*} bits.
+     */
+    static native void setFlags(long state, int flags);
+
+    /**
+     * Set a global variable to an encoded value.
+     *
+     * @param state The current state.
+     * @param name  The name of the global, as Lua-encoded bytes.
+     * @param value A single encoded value.
+     * @return Whether the global was set successfully.
+     */
+    static native boolean setGlobal(long state, byte[] name, byte[] value);
+
+    /**
+     * Compile and load the BIOS, creating the machine's main coroutine.
+     *
+     * @param state     The current state.
+     * @param bios      The BIOS source code.
+     * @param chunkName The chunk name, typically {@code @bios.lua}.
+     * @return A pointer to the main coroutine.
+     * @throws dan200.computercraft.core.lua.MachineException If the BIOS could not be compiled.
+     */
+    static native long loadBios(long state, byte[] bios, String chunkName) throws dan200.computercraft.core.lua.MachineException;
+
+    /**
+     * Resume a coroutine.
+     *
+     * @param state  The current state.
+     * @param thread The coroutine to resume.
+     * @param args   The encoded arguments, or {@code null} to continue from a break.
+     * @return A response buffer, starting with a {@code RESUME_*} status byte.
+     */
+    static native byte @Nullable [] resume(long state, long thread, byte @Nullable [] args);
+
+    /**
+     * Get a traceback of the given thread, for debugging.
+     *
+     * @param thread The thread to inspect.
+     * @return The traceback.
+     */
+    static native String debugTrace(long thread);
+}

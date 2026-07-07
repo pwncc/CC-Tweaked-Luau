@@ -12,7 +12,6 @@ import dan200.computercraft.core.ComputerContext;
 import dan200.computercraft.core.computer.GlobalEnvironment;
 import dan200.computercraft.core.computer.mainthread.MainThread;
 import dan200.computercraft.core.computer.mainthread.MainThreadConfig;
-import dan200.computercraft.core.lua.CobaltLuaMachine;
 import dan200.computercraft.core.lua.ILuaMachine;
 import dan200.computercraft.core.methods.MethodSupplier;
 import dan200.computercraft.core.methods.PeripheralMethod;
@@ -51,7 +50,7 @@ public final class ServerContext {
     private static final LevelResource FOLDER = new LevelResource(ComputerCraftAPI.MOD_ID);
 
     @VisibleForTesting
-    public static ILuaMachine.Factory luaMachine = CobaltLuaMachine::new;
+    public static ILuaMachine.Factory luaMachine = ComputerContext.defaultLuaFactory();
 
     private static @Nullable ServerContext instance;
 

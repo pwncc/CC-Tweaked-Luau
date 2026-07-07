@@ -217,7 +217,7 @@ describe("cc.pretty", function()
                 expect(pretty(pretty)):eq(tostring(pretty))
             end)
 
-            it("shows function arguments", function()
+            it("shows function arguments :cobalt_debug", function()
                 local f = function(a, ...) end
                 expect(pretty(f, nil, { function_args = true })):eq(tostring(f) .. "(a, ...)")
             end)

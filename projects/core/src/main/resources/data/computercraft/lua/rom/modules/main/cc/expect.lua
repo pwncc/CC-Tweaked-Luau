@@ -71,9 +71,15 @@ local function expect(index, value, ...)
     end
 
     -- If we can determine the function name with a high level of confidence, try to include it.
+    --
+    -- This is skipped on Luau: its debug names are attached to functions at compile time rather
+    -- than inferred from the call site, which changes which errors carry a name. We prefer to
+    -- keep error messages identical across the Cobalt and Luau runtimes.
     local name
-    local ok, info = pcall(debug.getinfo, 3, "nS")
-    if ok and info.name and info.name ~= "" and info.what ~= "C" then name = info.name end
+    if _VERSION ~= "Luau" then
+        local ok, info = pcall(debug.getinfo, 3, "nS")
+        if ok and info and info.name and info.name ~= "" and info.what ~= "C" then name = info.name end
+    end
 
     t = get_display_type(value, t)
 

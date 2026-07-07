@@ -9,7 +9,35 @@ SPDX-License-Identifier: MPL-2.0
 -->
 
 # Lua 5.2/5.3 features in CC: Tweaked
-CC: Tweaked is based off of the Cobalt Lua runtime, which uses Lua 5.2. However, Cobalt and CC:T implement additional
+CC: Tweaked runs on the [Luau](https://luau.org/) runtime when its native library is available for your platform
+(Windows, Linux and macOS on desktop and servers), falling back to the Cobalt Lua runtime (Lua 5.2) elsewhere, such as
+the web-based emulator.
+
+## The Luau runtime
+When running on Luau, computers use the real Luau virtual machine and compiler. This brings significant performance
+improvements and the full set of [Luau language features](https://luau.org/syntax), including:
+
+ - `continue` in loops.
+ - Compound assignment (`+=`, `..=`, etc.).
+ - String interpolation (`` `x = {x}` ``).
+ - `if ... then ... else ...` expressions.
+ - Type annotation syntax (type checking is not enforced at runtime).
+ - The `buffer` and `vector` libraries, `table.freeze`/`table.clone`, and other Luau standard library extensions.
+
+There are some differences to be aware of compared to the Cobalt runtime:
+
+ - `goto`/labels and `string.dump` are not supported (Luau does not implement them).
+ - Coroutines cannot yield across C boundaries such as `string.gsub` callbacks, `table.sort` comparators or
+   metamethods. (`pcall`/`xpcall` and `load` remain yieldable.)
+ - The `debug` library is limited to `debug.traceback` and `debug.info`, with a compatibility shim for common
+   `debug.getinfo` usage. `debug.getlocal`, `debug.getupvalue`, `debug.sethook` and `debug.getregistry` are
+   unavailable.
+ - Binary chunks are rejected by `load`/`loadstring`, as Luau bytecode is unsafe to load from untrusted sources.
+ - Tail calls are not eliminated, so `error` levels and stack traces may differ slightly.
+
+The tables below describe the Cobalt runtime.
+
+Cobalt and CC:T implement additional
 features from Lua 5.2 and 5.3 (as well as some deprecated 5.0 and 5.1 features). This page lists all of the
 compatibility for these newer versions.
 

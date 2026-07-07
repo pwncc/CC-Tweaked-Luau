@@ -37,3 +37,6 @@
 *.launch
 
 /projects/*/src/generated/resources/.cache
+
+# Local native build toolchain (portable GCC/Ninja/JDK, downloaded by developers)
+/vendor/tools/

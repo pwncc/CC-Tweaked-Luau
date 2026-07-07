@@ -100,7 +100,12 @@ local function capture_parser(input, print_tokens, start)
                 end
             end
         end, start)
-    end, debug.traceback)
+    end, function(e)
+        -- Pass non-string errors (such as our sentinel) through unchanged:
+        -- Luau's debug.traceback requires a string message.
+        if type(e) ~= "string" then return e end
+        return debug.traceback(e)
+    end)
 
     if not ok and err ~= error_sentinel then
         print(err)

@@ -4,8 +4,8 @@
 
 package dan200.computercraft.gametest.core
 
+import dan200.computercraft.core.ComputerContext
 import dan200.computercraft.core.apis.OSAPI
-import dan200.computercraft.core.lua.CobaltLuaMachine
 import dan200.computercraft.core.lua.ILuaMachine
 import dan200.computercraft.core.lua.MachineEnvironment
 import dan200.computercraft.gametest.api.thenOnComputer
@@ -67,13 +67,13 @@ object ManagedComputers : ILuaMachine.Factory {
         val id = os.computerID
         val label = os.computerLabel
         return when {
-            id != 1 -> CobaltLuaMachine(environment, bios)
+            id != 1 -> ComputerContext.defaultLuaFactory().create(environment, bios)
 
             label != null && label[0] != null -> KotlinMachine(environment, label[0] as String)
 
             else -> {
                 LOGGER.error("Kotlin Lua machine must have a label")
-                CobaltLuaMachine(environment, bios)
+                ComputerContext.defaultLuaFactory().create(environment, bios)
             }
         }
     }

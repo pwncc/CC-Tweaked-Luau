@@ -179,7 +179,7 @@ describe("The parallel library", function()
             return thread
         end
 
-        it("throws an exception when within a try", function()
+        it("throws an exception when within a try :cobalt_debug", function()
             local expected_thread
             local thread = check_failure(parallel.waitForAny, function()
                 expected_thread = coroutine.running()
@@ -189,7 +189,7 @@ describe("The parallel library", function()
             expect(thread):eq(expected_thread)
         end)
 
-        it("throws an exception when within a try (nested)", function()
+        it("throws an exception when within a try (nested) :cobalt_debug", function()
             local expected_thread
             local thread = check_failure(parallel.waitForAny, function()
                 parallel.waitForAny(function()
