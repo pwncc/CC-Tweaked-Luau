@@ -65,6 +65,30 @@ public class TerminalWidget extends AbstractWidget {
         innerHeight = terminal.getHeight() * FONT_HEIGHT;
     }
 
+    /**
+     * The horizontal render scale. The widget always occupies its original footprint: if the terminal is resized
+     * mid-session (e.g. {@code term.setResolution}), we render more (smaller) characters in the same space.
+     */
+    private float scaleX() {
+        var pixels = terminal.getWidth() * FONT_WIDTH;
+        return pixels == 0 ? 1 : (float) innerWidth / pixels;
+    }
+
+    private float scaleY() {
+        var pixels = terminal.getHeight() * FONT_HEIGHT;
+        return pixels == 0 ? 1 : (float) innerHeight / pixels;
+    }
+
+    private int charX(double mouseX) {
+        var charX = (int) ((mouseX - innerX) / (FONT_WIDTH * scaleX()));
+        return Math.min(Math.max(charX, 0), terminal.getWidth() - 1);
+    }
+
+    private int charY(double mouseY) {
+        var charY = (int) ((mouseY - innerY) / (FONT_HEIGHT * scaleY()));
+        return Math.min(Math.max(charY, 0), terminal.getHeight() - 1);
+    }
+
     @Override
     public boolean charTyped(char ch, int modifiers) {
         computerInput.codepointTyped(ch);
@@ -123,9 +147,7 @@ public class TerminalWidget extends AbstractWidget {
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
         if (!inTermRegion(mouseX, mouseY)) return false;
 
-        var charX = (int) ((mouseX - innerX) / FONT_WIDTH);
-        var charY = (int) ((mouseY - innerY) / FONT_HEIGHT);
-        computerInput.mouseClick(button + 1, charX + 1, charY + 1);
+        computerInput.mouseClick(button + 1, charX(mouseX) + 1, charY(mouseY) + 1);
 
         return true;
     }
@@ -134,9 +156,7 @@ public class TerminalWidget extends AbstractWidget {
     public boolean mouseReleased(double mouseX, double mouseY, int button) {
         if (!inTermRegion(mouseX, mouseY)) return false;
 
-        var charX = (int) ((mouseX - innerX) / FONT_WIDTH);
-        var charY = (int) ((mouseY - innerY) / FONT_HEIGHT);
-        computerInput.mouseUp(button + 1, charX + 1, charY + 1);
+        computerInput.mouseUp(button + 1, charX(mouseX) + 1, charY(mouseY) + 1);
 
         return true;
     }
@@ -145,9 +165,7 @@ public class TerminalWidget extends AbstractWidget {
     public boolean mouseDragged(double mouseX, double mouseY, int button, double v2, double v3) {
         if (!inTermRegion(mouseX, mouseY)) return false;
 
-        var charX = (int) ((mouseX - innerX) / FONT_WIDTH);
-        var charY = (int) ((mouseY - innerY) / FONT_HEIGHT);
-        computerInput.mouseDrag(button + 1, charX + 1, charY + 1);
+        computerInput.mouseDrag(button + 1, charX(mouseX) + 1, charY(mouseY) + 1);
         return true;
     }
 
@@ -156,9 +174,7 @@ public class TerminalWidget extends AbstractWidget {
         if (!inTermRegion(mouseX, mouseY)) return false;
         if (delta == 0) return false;
 
-        var charX = (int) ((mouseX - innerX) / FONT_WIDTH);
-        var charY = (int) ((mouseY - innerY) / FONT_HEIGHT);
-        computerInput.mouseScroll(delta < 0 ? 1 : -1, charX + 1, charY + 1);
+        computerInput.mouseScroll(delta < 0 ? 1 : -1, charX(mouseX) + 1, charY(mouseY) + 1);
 
         return true;
     }
@@ -195,15 +211,24 @@ public class TerminalWidget extends AbstractWidget {
     public void renderWidget(GuiGraphics graphics, int mouseX, int mouseY, float partialTicks) {
         if (!visible) return;
 
+        var scaleX = scaleX();
+        var scaleY = scaleY();
+
+        var pose = graphics.pose();
+        pose.pushPose();
+        pose.translate(innerX, innerY, 0);
+        if (scaleX != 1 || scaleY != 1) pose.scale(scaleX, scaleY, 1);
+
         var bufferSource = MultiBufferSource.immediate(Tesselator.getInstance().getBuilder());
-        var emitter = FixedWidthFontRenderer.toVertexConsumer(graphics.pose(), bufferSource.getBuffer(RenderTypes.TERMINAL));
+        var emitter = FixedWidthFontRenderer.toVertexConsumer(pose, bufferSource.getBuffer(RenderTypes.TERMINAL));
 
         FixedWidthFontRenderer.drawTerminal(
             emitter,
-            (float) innerX, (float) innerY, terminal, (float) MARGIN, (float) MARGIN, (float) MARGIN, (float) MARGIN
+            0, 0, terminal, MARGIN / scaleY, MARGIN / scaleY, MARGIN / scaleX, MARGIN / scaleX
         );
 
         bufferSource.endBatch();
+        pose.popPose();
     }
 
     @Override

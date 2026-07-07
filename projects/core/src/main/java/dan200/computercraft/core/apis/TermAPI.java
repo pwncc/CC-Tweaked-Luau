@@ -66,14 +66,80 @@ import dan200.computercraft.core.util.Colour;
  */
 public class TermAPI extends TermMethods implements ILuaAPI {
     private final Terminal terminal;
+    private final IAPIEnvironment environment;
+    private final int baseWidth;
+    private final int baseHeight;
 
     public TermAPI(IAPIEnvironment environment) {
         terminal = environment.getTerminal();
+        this.environment = environment;
+        baseWidth = terminal.getWidth();
+        baseHeight = terminal.getHeight();
     }
 
     @Override
     public String[] getNames() {
         return new String[]{ "term" };
+    }
+
+    /**
+     * Get the environment this API is bound to. This is used by the Luau runtime, which implements the term API
+     * natively.
+     *
+     * @return The API environment.
+     */
+    public IAPIEnvironment environment() {
+        return environment;
+    }
+
+    /**
+     * Set the resolution of this terminal. A scale of 1 is the standard terminal size, while higher values multiply
+     * the number of rows and columns, rendering more (smaller) characters in the same screen space.
+     * <p>
+     * Programs should check this function exists before calling it, and reset the resolution before exiting. A
+     * {@code term_resize} event is queued after the resolution changes.
+     *
+     * @param scale The resolution multiplier, between 1 and 3.
+     * @throws LuaException If the scale is out of range.
+     * @cc.since 1.121.0
+     */
+    @LuaFunction
+    public final void setResolution(int scale) throws LuaException {
+        if (scale < 1 || scale > 3) throw new LuaException("Expected scale in range 1-3");
+        synchronized (terminal) {
+            terminal.resize(baseWidth * scale, baseHeight * scale);
+        }
+        environment.queueEvent("term_resize");
+    }
+
+    /**
+     * Get the current resolution multiplier of this terminal.
+     *
+     * @return The resolution multiplier.
+     * @cc.since 1.121.0
+     * @see #setResolution(int)
+     */
+    @LuaFunction
+    public final int getResolution() {
+        return Math.max(1, terminal.getWidth() / baseWidth);
+    }
+
+    /**
+     * Get the base terminal size, as used by {@link #setResolution(int)}.
+     *
+     * @return The base width and height.
+     */
+    public int baseWidth() {
+        return baseWidth;
+    }
+
+    /**
+     * Get the base terminal height.
+     *
+     * @return The base height.
+     */
+    public int baseHeight() {
+        return baseHeight;
     }
 
     /**
