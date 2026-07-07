@@ -30,6 +30,11 @@
 #include "lua.h"
 #include "lualib.h"
 #include "luacode.h"
+#include "luacodegen.h"
+
+// VM internals, for luaG_isnative: break/resume is not reliable for
+// natively-compiled (JIT) frames, so we never suspend those.
+#include "ldebug.h"
 
 // ---------------------------------------------------------------------------
 // Value protocol tags. Must match LuauValueCodec.java.
@@ -85,7 +90,9 @@ static const size_t FAST_BUFFER_SIZE = 256 * 1024;
 // long-running code draws without yielding).
 struct NativeTerm {
     int width = 0, height = 0;
+    int baseWidth = 0, baseHeight = 0;
     bool colour = true;
+    bool resizeDirty = false;
 
     // Row-major width*height byte planes. fg/bg hold raw bytes (usually hex
     // digits), mirroring Java's TextBuffer semantics.
@@ -105,7 +112,7 @@ struct NativeTerm {
     double lastSync = 0;
 
     bool anyDirty() const {
-        return cursorDirty || paletteDirty || anyLineDirty;
+        return cursorDirty || paletteDirty || anyLineDirty || resizeDirty;
     }
 
     void markLine(int y) {
@@ -148,13 +155,24 @@ struct MachineState {
     NativeTerm* term = nullptr;
     NativeRedstone* redstone = nullptr;
 
+    // Whether Luau's native code generator (JIT) is active for this state.
+    bool codegen = false;
+
     // The chain of threads suspended by a pause break, innermost first,
     // outermost (main) last. A pause interrupts the running (leaf) thread, and
     // the break then propagates up through every parent coroutine.resume. To
     // resume, we must run the leaf first: Luau's coresumecont re-breaks a
     // parent whose child is still LUA_BREAK, so the child's break must clear
     // before its parent is resumed.
+    //
+    // A new break can fire while an earlier chain is still draining (the
+    // resumed leaf runs its timeslice and pauses again, possibly inside a
+    // freshly-entered child coroutine). The suspended outer links are still
+    // live, so new entries are inserted at the front rather than resetting
+    // the chain. breakInsert tracks where newly-interrupted parents slot in,
+    // preserving inner-to-outer order.
     std::vector<lua_State*> breakChain;
+    size_t breakInsert = 0;
 
     bool anyStateDirty() const {
         return (term != nullptr && term->anyDirty()) || (redstone != nullptr && redstone->outputDirty);
@@ -163,19 +181,33 @@ struct MachineState {
 
 static MachineState* getMachine(lua_State* L);
 
-// Record the innermost broken thread (the one the interrupt fired on).
+// Record the innermost broken thread (the one the interrupt fired on). If it
+// is already part of a draining chain (a re-break of the same leaf), keep the
+// chain as-is; otherwise it becomes the new innermost link.
 static void recordBreakLeaf(MachineState* m, lua_State* L) {
-    m->breakChain.clear();
-    m->breakChain.push_back(L);
+    for (size_t i = 0; i < m->breakChain.size(); i++) {
+        if (m->breakChain[i] == L) {
+            m->breakInsert = i + 1;
+            return;
+        }
+    }
+    m->breakChain.insert(m->breakChain.begin(), L);
+    m->breakInsert = 1;
 }
 
 // Record a parent thread as the break propagates up through it. Called from
-// the debuginterrupt callback, which fires once per interrupted parent.
+// the debuginterrupt callback, which fires once per interrupted parent,
+// innermost first. Parents already in the chain (suspended by an earlier
+// break) keep their position; propagation above them is already recorded.
 static void recordBreakParent(MachineState* m, lua_State* L) {
-    for (lua_State* existing : m->breakChain) {
-        if (existing == L) return;
+    for (size_t i = 0; i < m->breakChain.size(); i++) {
+        if (m->breakChain[i] == L) {
+            m->breakInsert = i + 1;
+            return;
+        }
     }
-    m->breakChain.push_back(L);
+    m->breakChain.insert(m->breakChain.begin() + m->breakInsert, L);
+    m->breakInsert++;
 }
 
 static void debugInterruptCallback(lua_State* L, lua_Debug* ar) {
@@ -720,6 +752,8 @@ static int ccluauLoadChunk(lua_State* L, const char* chunk, size_t chunkLen, con
         lua_insert(L, -2);
         return 2;
     }
+
+    if (getMachine(L)->codegen) luau_codegen_compile(L, -1);
     return 1;
 }
 
@@ -1130,6 +1164,45 @@ static int termNativePaletteColour(lua_State* L) {
     return 3;
 }
 
+static int termSetResolution(lua_State* L) {
+    NativeTerm* t = getTerm(L);
+    int scale = checkJavaInt(L, 1);
+    if (scale < 1 || scale > 3) luaL_error(L, "Expected scale in range 1-3");
+
+    int newWidth = t->baseWidth * scale;
+    int newHeight = t->baseHeight * scale;
+    if (newWidth == t->width && newHeight == t->height) return 0;
+
+    // Resize, preserving the overlapping content (as Terminal.resize does).
+    size_t size = (size_t) newWidth * newHeight;
+    std::vector<uint8_t> newText(size, ' ');
+    std::vector<uint8_t> newFg(size, (uint8_t) HEX_DIGITS[t->curFg]);
+    std::vector<uint8_t> newBg(size, (uint8_t) HEX_DIGITS[t->curBg]);
+    int copyW = newWidth < t->width ? newWidth : t->width;
+    int copyH = newHeight < t->height ? newHeight : t->height;
+    for (int y = 0; y < copyH; y++) {
+        memcpy(newText.data() + (size_t) y * newWidth, t->text.data() + (size_t) y * t->width, (size_t) copyW);
+        memcpy(newFg.data() + (size_t) y * newWidth, t->fg.data() + (size_t) y * t->width, (size_t) copyW);
+        memcpy(newBg.data() + (size_t) y * newWidth, t->bg.data() + (size_t) y * t->width, (size_t) copyW);
+    }
+    t->text.swap(newText);
+    t->fg.swap(newFg);
+    t->bg.swap(newBg);
+    t->width = newWidth;
+    t->height = newHeight;
+    t->lineDirty.assign((size_t) newHeight, 1);
+    t->anyLineDirty = true;
+    t->resizeDirty = true;
+    return 0;
+}
+
+static int termGetResolution(lua_State* L) {
+    NativeTerm* t = getTerm(L);
+    int scale = t->baseWidth > 0 ? t->width / t->baseWidth : 1;
+    lua_pushinteger(L, scale < 1 ? 1 : scale);
+    return 1;
+}
+
 static const luaL_Reg TERM_METHODS[] = {
     { "write", termWrite },
     { "blit", termBlit },
@@ -1157,6 +1230,8 @@ static const luaL_Reg TERM_METHODS[] = {
     { "getPaletteColor", termGetPaletteColour },
     { "nativePaletteColour", termNativePaletteColour },
     { "nativePaletteColor", termNativePaletteColour },
+    { "setResolution", termSetResolution },
+    { "getResolution", termGetResolution },
     { nullptr, nullptr },
 };
 
@@ -1418,9 +1493,13 @@ static void interruptCallback(lua_State* L, int gc) {
     // metamethod), so only break at yieldable safepoints; otherwise we try
     // again at the next one.
     if (flags & FLAG_HARD_ABORT) {
-        if (lua_isyieldable(L)) {
+        if (lua_isyieldable(L) && !luaG_isnative(L, 0)) {
             recordBreakLeaf(m, L);
             lua_break(L);
+        } else if (luaG_isnative(L, 0)) {
+            // Native frames cannot be suspended; unwind with an error
+            // instead. The machine is being destroyed either way.
+            luaL_error(L, "Too long without yielding");
         }
         return;
     }
@@ -1436,7 +1515,7 @@ static void interruptCallback(lua_State* L, int gc) {
             }
         }
     }
-    if ((flags & FLAG_PAUSE) && lua_isyieldable(L)) {
+    if ((flags & FLAG_PAUSE) && lua_isyieldable(L) && !luaG_isnative(L, 0)) {
         recordBreakLeaf(m, L);
         lua_break(L);
     }
@@ -1492,6 +1571,13 @@ JNIEXPORT jlong JNICALL Java_dan200_computercraft_core_lua_luau_LuauNative_creat
     cb->userdata = m;
     cb->interrupt = interruptCallback;
     cb->debuginterrupt = debugInterruptCallback;
+
+    // Luau's native code generator (JIT) gives a further ~30% speedup on
+    // compute-heavy code. Set CC_LUAU_NOJIT to fall back to the interpreter.
+    if (luau_codegen_supported() && getenv("CC_LUAU_NOJIT") == nullptr) {
+        luau_codegen_create(L);
+        m->codegen = true;
+    }
 
     luaL_openlibs(L);
 
@@ -1606,6 +1692,8 @@ JNIEXPORT jlong JNICALL Java_dan200_computercraft_core_lua_luau_LuauNative_loadB
         return 0;
     }
 
+    if (m->codegen) luau_codegen_compile(thread, -1);
+
     return (jlong) (uintptr_t) thread;
 }
 
@@ -1633,6 +1721,7 @@ JNIEXPORT jbyteArray JNICALL Java_dan200_computercraft_core_lua_luau_LuauNative_
         // A fresh event (or a break with no chain): fully unwind and resume the
         // main thread with the decoded arguments.
         m->breakChain.clear();
+        m->breakInsert = 0;
 
         int nargs = 0;
         if (argsArr != nullptr) {
@@ -1761,6 +1850,8 @@ JNIEXPORT void JNICALL Java_dan200_computercraft_core_lua_luau_LuauNative_initTe
     }
 
     termLoadContent(env, term, width, height, text, fg, bg);
+    term->baseWidth = width;
+    term->baseHeight = height;
 
     // Install the term global.
     lua_createtable(L, 0, 26);
@@ -1801,7 +1892,14 @@ JNIEXPORT jint JNICALL Java_dan200_computercraft_core_lua_luau_LuauNative_syncTe
     if (term->paletteDirty) flags |= 2;
     if (term->anyLineDirty) flags |= 4;
     if (redstone != nullptr && redstone->outputDirty) flags |= 8;
+    if (term->resizeDirty) flags |= 16;
     w.u8(flags);
+
+    // The resize must come first: line payloads below use the new width.
+    if (term->resizeDirty) {
+        w.i32(term->width);
+        w.i32(term->height);
+    }
 
     if (term->cursorDirty) {
         w.i32(term->cursorX);
@@ -1845,6 +1943,7 @@ JNIEXPORT jint JNICALL Java_dan200_computercraft_core_lua_luau_LuauNative_syncTe
     term->cursorDirty = false;
     term->paletteDirty = false;
     term->anyLineDirty = false;
+    term->resizeDirty = false;
     std::fill(term->lineDirty.begin(), term->lineDirty.end(), 0);
     if (redstone != nullptr) redstone->outputDirty = false;
     return (jint) w.pos;
