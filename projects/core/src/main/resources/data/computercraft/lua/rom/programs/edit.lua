@@ -173,6 +173,13 @@ for _, token in pairs(tokens) do
     if not token_colours[token] then token_colours[token] = textColour end
 end
 
+-- Context-sensitive Luau keywords. These lex as identifiers, but deserve
+-- highlighting when running on the Luau runtime.
+local luau_keywords = _VERSION == "Luau" and {
+    ["continue"] = true,
+    ["export"] = true,
+} or {}
+
 local lex_context = { line = function() end, report = function() end }
 
 local tCompletions
@@ -251,17 +258,20 @@ local function redrawLines(line, endLine)
 
         -- Lex our first token, either taking our continuation state (if present) or
         -- the default lexer.
-        local pos, token, _, finish, continuation = 1
+        local pos, token, start, finish, continuation, _ = 1
         local lex_state = tLineLexStates[line]
         if lex_state then
             token, finish, _, continuation = lex_state[1](lex_context, contents, table.unpack(lex_state, 2))
         else
-            token, _, finish, _, continuation = lex_one(lex_context, contents, 1)
+            token, start, finish, _, continuation = lex_one(lex_context, contents, 1)
         end
 
         while token do
             -- Print out that token
             local new_colour = token_colours[token]
+            if token == tokens.IDENT and start and luau_keywords[contents:sub(start, finish)] then
+                new_colour = keywordColour
+            end
             if new_colour ~= colour then
                 term.setTextColor(new_colour)
                 colour = new_colour
@@ -274,7 +284,7 @@ local function redrawLines(line, endLine)
             if continuation then break end
 
             -- Otherwise lex another token and continue.
-            token, _, finish, _, continuation = lex_one(lex_context, contents, pos)
+            token, start, finish, _, continuation = lex_one(lex_context, contents, pos)
         end
 
         -- Print the rest of the line. We don't strictly speaking need this, as it will
