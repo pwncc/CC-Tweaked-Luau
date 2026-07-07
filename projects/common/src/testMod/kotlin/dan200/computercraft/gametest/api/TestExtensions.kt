@@ -69,7 +69,10 @@ object Timeouts {
 
     const val DEFAULT: Int = SECOND * 5
 
-    const val COMPUTER_TIMEOUT: Int = SECOND * 15
+    // Generous budget: the headless gametest server ticks unthrottled (often 100+ ticks/sec on a
+    // fast machine), while computer boot is wall-clock bound. A tick-based timeout must therefore
+    // cover the worst-case *wall* time at warp speed. Only failing tests wait this long.
+    const val COMPUTER_TIMEOUT: Int = SECOND * 120
 }
 
 /**

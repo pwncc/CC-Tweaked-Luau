@@ -13,6 +13,7 @@ import dan200.computercraft.api.lua.ILuaFunction;
 import dan200.computercraft.api.lua.LuaException;
 import dan200.computercraft.core.CoreConfig;
 import dan200.computercraft.core.Logging;
+import dan200.computercraft.core.apis.IAPIEnvironment;
 import dan200.computercraft.core.apis.RedstoneAPI;
 import dan200.computercraft.core.apis.TermAPI;
 import dan200.computercraft.core.computer.ComputerSide;
@@ -60,7 +61,6 @@ import java.util.Optional;
  */
 public final class LuauMachine implements ILuaMachine {
     private static final Logger LOG = LoggerFactory.getLogger(LuauMachine.class);
-
     private static final LuaMethod FUNCTION_METHOD = (target, context, args) -> ((ILuaFunction) target).call(args);
 
     // Value tags. Must match ccluau.cpp.
@@ -101,6 +101,7 @@ public final class LuauMachine implements ILuaMachine {
      * The terminal this machine's native term API is bound to, if any.
      */
     private @Nullable Terminal terminal;
+    private @Nullable IAPIEnvironment termEnvironment;
     private int termWidth = -1;
     private int termHeight = -1;
 
@@ -181,6 +182,7 @@ public final class LuauMachine implements ILuaMachine {
         // The term API is implemented natively: every method runs inside the Luau VM against a shadow terminal,
         // which is synced back to the Java terminal after execution.
         if (api instanceof TermAPI termApi) {
+            termEnvironment = termApi.environment();
             installTerm(termApi.getTerminal());
             return;
         }
@@ -301,6 +303,20 @@ public final class LuauMachine implements ILuaMachine {
 
         fastResp.clear().limit(length);
         var flags = fastResp.get();
+
+        // The Lua side changed resolution: resize the Java terminal to match
+        // before applying the (new-width) line data below.
+        if ((flags & 16) != 0 && terminal != null) {
+            var width = fastResp.getInt();
+            var height = fastResp.getInt();
+            synchronized (terminal) {
+                terminal.resize(width, height);
+            }
+            termWidth = width;
+            termHeight = height;
+            var environment = termEnvironment;
+            if (environment != null) environment.queueEvent("term_resize");
+        }
 
         if (terminal != null) synchronized (terminal) {
             if ((flags & 1) != 0) {

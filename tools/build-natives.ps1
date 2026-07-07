@@ -30,6 +30,7 @@ $includes = @(
     "$luau\Bytecode\include",
     "$luau\Inliner\include",
     "$luau\Compiler\include",
+    "$luau\CodeGen\include",
     "$luau\VM\include",
     "$luau\VM\src",
     "$jdk\include",
@@ -46,6 +47,7 @@ $sources += Get-ChildItem "$luau\Common\src\*.cpp"
 $sources += Get-ChildItem "$luau\Ast\src\*.cpp"
 $sources += Get-ChildItem "$luau\Bytecode\src\*.cpp"
 $sources += Get-ChildItem "$luau\Compiler\src\*.cpp"
+$sources += Get-ChildItem "$luau\CodeGen\src\*.cpp"
 $sources += Get-ChildItem "$luau\VM\src\*.cpp"
 $sources += Get-ChildItem "$bridge\*.cpp"
 
