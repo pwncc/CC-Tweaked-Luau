@@ -81,4 +81,25 @@ public interface ComputerInput {
      * @param y         The y coordinate of the mouse, between 1 and the terminal height (inclusive).
      */
     void mouseScroll(int direction, int x, int y);
+
+    /**
+     * Queue a {@code mouse_move} event. This fires when the pointer moves over the terminal with no button held
+     * (a held button fires {@code mouse_drag} instead).
+     * <p>
+     * Alongside the cell position, this carries the pointer's position <em>within</em> the cell, measured in
+     * teletext subpixels (2 wide, 3 tall), letting programs draw pointers with sub-cell precision.
+     *
+     * @param x    The x coordinate of the mouse, between 1 and the terminal width (inclusive).
+     * @param y    The y coordinate of the mouse, between 1 and the terminal height (inclusive).
+     * @param subX The horizontal subpixel within the cell, 0 or 1.
+     * @param subY The vertical subpixel within the cell, between 0 and 2 (inclusive).
+     */
+    default void mouseMove(int x, int y, int subX, int subY) {
+    }
+
+    /**
+     * Queue a {@code mouse_leave} event, fired when the pointer leaves the terminal entirely.
+     */
+    default void mouseLeave() {
+    }
 }

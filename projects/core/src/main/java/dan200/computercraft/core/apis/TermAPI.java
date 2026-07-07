@@ -99,17 +99,40 @@ public class TermAPI extends TermMethods implements ILuaAPI {
      * Programs should check this function exists before calling it, and reset the resolution before exiting. A
      * {@code term_resize} event is queued after the resolution changes.
      *
-     * @param scale The resolution multiplier, between 1 and 3.
+     * @param scale The resolution multiplier, between 1 and 10.
      * @throws LuaException If the scale is out of range.
      * @cc.since 1.121.0
      */
     @LuaFunction
     public final void setResolution(int scale) throws LuaException {
-        if (scale < 1 || scale > 3) throw new LuaException("Expected scale in range 1-3");
+        if (scale < 1 || scale > 10) throw new LuaException("Expected scale in range 1-10");
         synchronized (terminal) {
             terminal.resize(baseWidth * scale, baseHeight * scale);
         }
         environment.queueEvent("term_resize");
+    }
+
+    /**
+     * Request the hardware mouse pointer be hidden while it is over this terminal. Programs which enable this
+     * should draw their own pointer, following {@code mouse_move} and {@code mouse_leave} events.
+     *
+     * @param capture Whether to hide the hardware pointer.
+     * @cc.since 1.121.0
+     */
+    @LuaFunction
+    public final void setMouseCapture(boolean capture) {
+        terminal.setMouseCapture(capture);
+    }
+
+    /**
+     * Get whether mouse capture is enabled, as set by {@link #setMouseCapture(boolean)}.
+     *
+     * @return Whether the hardware pointer is hidden over this terminal.
+     * @cc.since 1.121.0
+     */
+    @LuaFunction
+    public final boolean getMouseCapture() {
+        return terminal.getMouseCapture();
     }
 
     /**

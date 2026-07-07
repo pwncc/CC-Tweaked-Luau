@@ -8,6 +8,7 @@ import dan200.computercraft.core.terminal.Terminal;
 import dan200.computercraft.core.util.StringUtil;
 import it.unimi.dsi.fastutil.ints.IntOpenHashSet;
 import it.unimi.dsi.fastutil.ints.IntSet;
+import org.jspecify.annotations.Nullable;
 
 import java.nio.ByteBuffer;
 
@@ -19,24 +20,41 @@ import java.nio.ByteBuffer;
 public final class UserComputerInput implements ComputerInput {
     private final ComputerInput delegate;
     private final boolean mouseSupport;
-    private final int termWidth;
-    private final int termHeight;
+    private final @Nullable Terminal terminal;
+    private final int fixedWidth;
+    private final int fixedHeight;
 
     private final IntSet keysDown = new IntOpenHashSet(4);
 
     private int lastMouseX;
     private int lastMouseY;
+    private int lastSubX;
+    private int lastSubY;
     private int lastMouseDown = -1;
+    private boolean mouseInside = false;
 
     public UserComputerInput(ComputerInput delegate, boolean mouseSupport, int termWidth, int termHeight) {
         this.delegate = delegate;
         this.mouseSupport = mouseSupport;
-        this.termWidth = termWidth;
-        this.termHeight = termHeight;
+        this.terminal = null;
+        this.fixedWidth = termWidth;
+        this.fixedHeight = termHeight;
     }
 
     public UserComputerInput(ComputerInput delegate, Terminal terminal) {
-        this(delegate, terminal.isColour(), terminal.getWidth(), terminal.getHeight());
+        this.delegate = delegate;
+        this.mouseSupport = terminal.isColour();
+        // Keep the terminal itself: its dimensions may change at runtime (term.setResolution).
+        this.terminal = terminal;
+        this.fixedWidth = this.fixedHeight = 0;
+    }
+
+    private int termWidth() {
+        return terminal != null ? terminal.getWidth() : fixedWidth;
+    }
+
+    private int termHeight() {
+        return terminal != null ? terminal.getHeight() : fixedHeight;
     }
 
     @Override
@@ -99,8 +117,8 @@ public final class UserComputerInput implements ComputerInput {
     @Override
     public void mouseClick(int button, int x, int y) {
         if (!mouseSupport || button < 1 || button > 3) return;
-        var clampedX = lastMouseX = Math.min(Math.max(x, 1), termWidth);
-        var clampedY = lastMouseY = Math.min(Math.max(y, 1), termHeight);
+        var clampedX = lastMouseX = Math.min(Math.max(x, 1), termWidth());
+        var clampedY = lastMouseY = Math.min(Math.max(y, 1), termHeight());
 
         delegate.mouseClick(button, clampedX, clampedY);
         lastMouseDown = button;
@@ -119,8 +137,8 @@ public final class UserComputerInput implements ComputerInput {
     @Override
     public void mouseUp(int button, int x, int y) {
         if (!mouseSupport || button < 1 || button > 3) return;
-        var clampedX = lastMouseX = Math.min(Math.max(x, 1), termWidth);
-        var clampedY = lastMouseY = Math.min(Math.max(y, 1), termHeight);
+        var clampedX = lastMouseX = Math.min(Math.max(x, 1), termWidth());
+        var clampedY = lastMouseY = Math.min(Math.max(y, 1), termHeight());
 
         if (lastMouseDown == button) {
             delegate.mouseUp(button, clampedX, clampedY);
@@ -141,8 +159,8 @@ public final class UserComputerInput implements ComputerInput {
     @Override
     public void mouseDrag(int button, int x, int y) {
         if (!mouseSupport || button < 1 || button > 3) return;
-        var clampedX = Math.min(Math.max(x, 1), termWidth);
-        var clampedY = Math.min(Math.max(y, 1), termHeight);
+        var clampedX = Math.min(Math.max(x, 1), termWidth());
+        var clampedY = Math.min(Math.max(y, 1), termHeight());
 
         if (button == lastMouseDown && (clampedX != lastMouseX || clampedY != lastMouseY)) {
             delegate.mouseDrag(button, clampedX, clampedY);
@@ -152,31 +170,52 @@ public final class UserComputerInput implements ComputerInput {
     }
 
     /**
-     * Update the mouse position, and optionally queue a {@code mouse_drag} event on the computer.
-     * <p>
-     * This is similar to {@link #mouseDrag(int, int, int)}, but when the currently clicked button is not available.
+     * Update the mouse position, queueing a {@code mouse_drag} event when a button is held or a
+     * {@code mouse_move} event otherwise. Drags fire when the pointer crosses into a new cell;
+     * moves fire on subpixel granularity (see {@link ComputerInput#mouseMove(int, int, int, int)}).
      *
-     * @param x The X position of the mouse, between 1 and the terminal width.
-     * @param y The Y position of the mouse, between 1 and the terminal width.
+     * @param x    The X position of the mouse, between 1 and the terminal width.
+     * @param y    The Y position of the mouse, between 1 and the terminal width.
+     * @param subX The horizontal subpixel within the cell, 0 or 1.
+     * @param subY The vertical subpixel within the cell, between 0 and 2 (inclusive).
      */
-    public void mouseMove(int x, int y) {
+    @Override
+    public void mouseMove(int x, int y, int subX, int subY) {
         if (!mouseSupport) return;
-        var clampedX = Math.min(Math.max(x, 1), termWidth);
-        var clampedY = Math.min(Math.max(y, 1), termHeight);
+        var clampedX = Math.min(Math.max(x, 1), termWidth());
+        var clampedY = Math.min(Math.max(y, 1), termHeight());
+        subX = Math.min(Math.max(subX, 0), 1);
+        subY = Math.min(Math.max(subY, 0), 2);
 
-        if (lastMouseDown != -1 && (clampedX != lastMouseX || clampedY != lastMouseY)) {
-            delegate.mouseDrag(lastMouseDown, clampedX, clampedY);
+        var moved = clampedX != lastMouseX || clampedY != lastMouseY;
+        if (lastMouseDown != -1) {
+            if (moved) delegate.mouseDrag(lastMouseDown, clampedX, clampedY);
+        } else if (moved || subX != lastSubX || subY != lastSubY || !mouseInside) {
+            delegate.mouseMove(clampedX, clampedY, subX, subY);
         }
+        mouseInside = true;
 
         lastMouseX = clampedX;
         lastMouseY = clampedY;
+        lastSubX = subX;
+        lastSubY = subY;
+    }
+
+    /**
+     * Queue a {@code mouse_leave} event when the pointer leaves the terminal. Duplicate calls are ignored.
+     */
+    @Override
+    public void mouseLeave() {
+        if (!mouseSupport || !mouseInside) return;
+        mouseInside = false;
+        delegate.mouseLeave();
     }
 
     @Override
     public void mouseScroll(int direction, int x, int y) {
         if (!mouseSupport || direction == 0) return;
-        var clampedX = lastMouseX = Math.min(Math.max(x, 1), termWidth);
-        var clampedY = lastMouseY = Math.min(Math.max(y, 1), termHeight);
+        var clampedX = lastMouseX = Math.min(Math.max(x, 1), termWidth());
+        var clampedY = lastMouseY = Math.min(Math.max(y, 1), termHeight());
 
         delegate.mouseScroll(direction, clampedX, clampedY);
     }
@@ -204,6 +243,12 @@ public final class UserComputerInput implements ComputerInput {
         if (lastMouseDown != -1) {
             delegate.mouseUp(lastMouseDown, lastMouseX, lastMouseY);
             lastMouseDown = -1;
+        }
+
+        // The pointer is gone too (e.g. the screen was closed).
+        if (mouseInside) {
+            mouseInside = false;
+            delegate.mouseLeave();
         }
     }
 }

@@ -14,6 +14,10 @@ public class Terminal {
 
     protected int width;
     protected int height;
+    // The terminal's natural size: its dimensions at scale 1. resize() (e.g. term.setResolution)
+    // changes width/height but not these; renderers use them to keep a fixed on-screen footprint.
+    protected int baseWidth;
+    protected int baseHeight;
     protected final boolean colour;
 
     protected int cursorX = 0;
@@ -37,6 +41,8 @@ public class Terminal {
     public Terminal(int width, int height, boolean colour, @Nullable Runnable changedCallback) {
         this.width = width;
         this.height = height;
+        baseWidth = width;
+        baseHeight = height;
         this.colour = colour;
         palette = new Palette(colour);
         onChanged = changedCallback;
@@ -70,8 +76,44 @@ public class Terminal {
         return height;
     }
 
+    public int getBaseWidth() {
+        return baseWidth;
+    }
+
+    public int getBaseHeight() {
+        return baseHeight;
+    }
+
+    /**
+     * Set the terminal's natural (scale 1) size, as used when replicating a terminal.
+     *
+     * @param width  The base width.
+     * @param height The base height.
+     */
+    public void setBase(int width, int height) {
+        baseWidth = width;
+        baseHeight = height;
+    }
+
     public boolean isColour() {
         return colour;
+    }
+
+    /**
+     * Whether the program has requested the hardware mouse pointer be hidden while over the terminal
+     * (typically because it draws its own pointer, driven by {@code mouse_move} events).
+     */
+    protected boolean mouseCapture = false;
+
+    public boolean getMouseCapture() {
+        return mouseCapture;
+    }
+
+    public synchronized void setMouseCapture(boolean capture) {
+        if (mouseCapture != capture) {
+            mouseCapture = capture;
+            setChanged();
+        }
     }
 
     public synchronized void resize(int width, int height) {

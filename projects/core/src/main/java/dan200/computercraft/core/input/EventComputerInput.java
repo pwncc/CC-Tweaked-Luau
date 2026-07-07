@@ -63,6 +63,16 @@ public final class EventComputerInput implements ComputerInput {
         receiver.queueEvent("mouse_scroll", new Object[]{ direction, x, y });
     }
 
+    @Override
+    public void mouseMove(int x, int y, int subX, int subY) {
+        receiver.queueEvent("mouse_move", new Object[]{ x, y, subX, subY });
+    }
+
+    @Override
+    public void mouseLeave() {
+        receiver.queueEvent("mouse_leave", null);
+    }
+
     /**
      * A function to queue events.
      */

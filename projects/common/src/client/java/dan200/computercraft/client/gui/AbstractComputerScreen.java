@@ -150,6 +150,20 @@ public abstract class AbstractComputerScreen<T extends AbstractComputerMenu> ext
     }
 
     @Override
+    public void mouseMoved(double x, double y) {
+        // Vanilla screens don't forward pointer motion to their children, so do it ourselves: the terminal
+        // uses it for mouse_move events and to hide the hardware cursor while capturing.
+        if (terminal != null) terminal.mouseMoved(x, y);
+        super.mouseMoved(x, y);
+    }
+
+    @Override
+    public void removed() {
+        super.removed();
+        if (terminal != null) terminal.onClosed();
+    }
+
+    @Override
     public void setFocused(@Nullable GuiEventListener listener) {
         // Don't clear and re-focus if we're already focused.
         if (listener != getFocused()) super.setFocused(listener);

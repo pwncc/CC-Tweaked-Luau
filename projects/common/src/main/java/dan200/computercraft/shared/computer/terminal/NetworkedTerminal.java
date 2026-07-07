@@ -38,17 +38,22 @@ public class NetworkedTerminal extends Terminal {
         }
 
         assert idx == contents.length;
-        return new TerminalState(colour, width, height, cursorX, cursorY, cursorBlink, cursorColour, cursorBackgroundColour, contents);
+        return new TerminalState(
+            colour, width, height, baseWidth, baseHeight,
+            cursorX, cursorY, cursorBlink, cursorColour, cursorBackgroundColour, mouseCapture, contents
+        );
     }
 
     synchronized void read(TerminalState state) {
         resize(state.width, state.height);
+        setBase(state.baseWidth, state.baseHeight);
         cursorX = state.cursorX;
         cursorY = state.cursorY;
         cursorBlink = state.cursorBlink;
 
         cursorBackgroundColour = state.cursorBgColour;
         this.cursorColour = state.cursorFgColour;
+        mouseCapture = state.mouseCapture;
 
         var contents = state.contents;
         var idx = 0;

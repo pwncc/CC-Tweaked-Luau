@@ -52,8 +52,17 @@ public class TerminalWidget extends AbstractWidget {
     private float rebootTimer = -1;
     private float shutdownTimer = -1;
 
+    private int lastMoveX = -1;
+    private int lastMoveY = -1;
+    private int lastSubX = -1;
+    private int lastSubY = -1;
+    private boolean pointerInside = false;
+    private boolean cursorHidden = false;
+
     public TerminalWidget(Terminal terminal, UserComputerInput computerInput, ClientComputerActions computerActions, int x, int y) {
-        super(x, y, terminal.getWidth() * FONT_WIDTH + MARGIN * 2, terminal.getHeight() * FONT_HEIGHT + MARGIN * 2, DESCRIPTION);
+        // The widget's footprint comes from the terminal's *base* size: a terminal resized by
+        // term.setResolution renders more (smaller) characters in the same space.
+        super(x, y, terminal.getBaseWidth() * FONT_WIDTH + MARGIN * 2, terminal.getBaseHeight() * FONT_HEIGHT + MARGIN * 2, DESCRIPTION);
 
         this.terminal = terminal;
         this.computerInput = computerInput;
@@ -61,8 +70,8 @@ public class TerminalWidget extends AbstractWidget {
 
         innerX = x + MARGIN;
         innerY = y + MARGIN;
-        innerWidth = terminal.getWidth() * FONT_WIDTH;
-        innerHeight = terminal.getHeight() * FONT_HEIGHT;
+        innerWidth = terminal.getBaseWidth() * FONT_WIDTH;
+        innerHeight = terminal.getBaseHeight() * FONT_HEIGHT;
     }
 
     /**
@@ -179,6 +188,58 @@ public class TerminalWidget extends AbstractWidget {
         return true;
     }
 
+    @Override
+    public void mouseMoved(double mouseX, double mouseY) {
+        if (inTermRegion(mouseX, mouseY)) {
+            // Cell position, plus the teletext subpixel (2x3 per cell) within it, so pointers can
+            // track the mouse at finer-than-cell precision.
+            var rawX = (mouseX - innerX) / (FONT_WIDTH * scaleX());
+            var rawY = (mouseY - innerY) / (FONT_HEIGHT * scaleY());
+            var cellX = Math.min(Math.max((int) rawX, 0), terminal.getWidth() - 1) + 1;
+            var cellY = Math.min(Math.max((int) rawY, 0), terminal.getHeight() - 1) + 1;
+            var subX = Math.min(Math.max((int) ((rawX - Math.floor(rawX)) * 2), 0), 1);
+            var subY = Math.min(Math.max((int) ((rawY - Math.floor(rawY)) * 3), 0), 2);
+            if (!pointerInside || cellX != lastMoveX || cellY != lastMoveY || subX != lastSubX || subY != lastSubY) {
+                pointerInside = true;
+                lastMoveX = cellX;
+                lastMoveY = cellY;
+                lastSubX = subX;
+                lastSubY = subY;
+                computerInput.mouseMove(cellX, cellY, subX, subY);
+            }
+        } else if (pointerInside) {
+            pointerInside = false;
+            lastMoveX = lastMoveY = lastSubX = lastSubY = -1;
+            computerInput.mouseLeave();
+        }
+        updateCursorVisibility();
+    }
+
+    /**
+     * Hide the hardware cursor while it hovers the terminal of a program which draws its own pointer
+     * (see {@code term.setMouseCapture}). The ordinary cursor re-appears as soon as the program stops
+     * capturing or the pointer leaves the terminal.
+     */
+    private void updateCursorVisibility() {
+        var hide = pointerInside && active && visible && terminal.getMouseCapture();
+        if (hide == cursorHidden) return;
+        cursorHidden = hide;
+        GLFW.glfwSetInputMode(
+            Minecraft.getInstance().getWindow().getWindow(), GLFW.GLFW_CURSOR,
+            hide ? GLFW.GLFW_CURSOR_HIDDEN : GLFW.GLFW_CURSOR_NORMAL
+        );
+    }
+
+    /**
+     * Restore input state when the containing screen closes: release held inputs and un-hide the cursor.
+     */
+    public void onClosed() {
+        computerInput.releaseInputs();
+        pointerInside = false;
+        lastMoveX = lastMoveY = lastSubX = lastSubY = -1;
+        updateCursorVisibility();
+    }
+
     private boolean inTermRegion(double mouseX, double mouseY) {
         return active && visible && mouseX >= innerX && mouseY >= innerY && mouseX < innerX + innerWidth && mouseY < innerY + innerHeight;
     }
@@ -228,6 +289,61 @@ public class TerminalWidget extends AbstractWidget {
         );
 
         bufferSource.endBatch();
+        pose.popPose();
+
+        renderPointer(graphics);
+    }
+
+    /**
+     * The pointer, drawn over the terminal while the program captures the mouse. Rendering it here -
+     * rather than as terminal cells - means it moves with per-pixel smoothness, floats above text
+     * without erasing it, and is unaffected by the terminal's cell grid.
+     */
+    private static final String[] ARROW_PATTERN = {
+        "X          ",
+        "XX         ",
+        "XoX        ",
+        "XooX       ",
+        "XoooX      ",
+        "XooooX     ",
+        "XoooooX    ",
+        "XooooooX   ",
+        "XoooooooX  ",
+        "XooooooooX ",
+        "XoooooXXXXX",
+        "XooXooX    ",
+        "XoX XooX   ",
+        "XX  XooX   ",
+        "X    XooX  ",
+        "     XooX  ",
+        "      XX   ",
+    };
+
+    private void renderPointer(GuiGraphics graphics) {
+        if (!terminal.getMouseCapture() || !pointerInside) return;
+
+        // The raw cursor position, in GUI coordinates but at full (double) precision.
+        var minecraft = Minecraft.getInstance();
+        var window = minecraft.getWindow();
+        var mouseX = minecraft.mouseHandler.xpos() * window.getGuiScaledWidth() / window.getScreenWidth();
+        var mouseY = minecraft.mouseHandler.ypos() * window.getGuiScaledHeight() / window.getScreenHeight();
+        if (!inTermRegion(mouseX, mouseY)) return;
+
+        // Scale the arrow to stand about a cell and a half tall at the base resolution, regardless
+        // of pixel density.
+        var unit = innerHeight * 1.5f / terminal.getBaseHeight() / ARROW_PATTERN.length;
+
+        var pose = graphics.pose();
+        pose.pushPose();
+        pose.translate(mouseX, mouseY, 0);
+        pose.scale(unit, unit, 1);
+        for (var y = 0; y < ARROW_PATTERN.length; y++) {
+            var row = ARROW_PATTERN[y];
+            for (var x = 0; x < row.length(); x++) {
+                var kind = row.charAt(x);
+                if (kind != ' ') graphics.fill(x, y, x + 1, y + 1, kind == 'o' ? 0xFFFFFFFF : 0xFF000000);
+            }
+        }
         pose.popPose();
     }
 
