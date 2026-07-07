@@ -2,6 +2,69 @@
 --
 -- SPDX-License-Identifier: LicenseRef-CCPL
 
+-- Compatibility shims for the Luau runtime. Luau's debug library only
+-- provides debug.info/debug.traceback, so reconstruct the parts of
+-- debug.getinfo that CraftOS uses. See also cc.internal.exception, which
+-- degrades gracefully when debug.getlocal is unavailable.
+if _VERSION == "Luau" and debug and not debug.getmetatable then
+    -- Luau has no debug.getmetatable. Plain getmetatable is close enough for
+    -- our purposes (it only differs for __metatable-protected tables).
+    debug.getmetatable = getmetatable
+end
+
+if _VERSION == "Luau" and debug and not debug.getinfo and debug.info then
+    local dinfo = debug.info
+
+    local function build_info(short_src, line, name, func, ok)
+        if not ok then return nil end
+
+        -- debug.info returns the PUC-style "short source". Reconstruct the
+        -- raw chunk name from it as best we can.
+        local source = short_src
+        if type(short_src) == "string" and short_src ~= "[C]" then
+            local str_name = short_src:match('^%[string "(.*)"%]$')
+            if str_name then
+                source = str_name
+            else
+                source = "@" .. short_src
+            end
+        end
+
+        return {
+            source = source,
+            short_src = short_src,
+            currentline = line,
+            linedefined = -1,
+            name = name ~= "" and name or nil,
+            what = short_src == "[C]" and "C" or "Lua",
+            func = func,
+        }
+    end
+
+    debug.getinfo = function(a, b, c)
+        if type(a) == "thread" then
+            local ok, source, line, name, func = pcall(dinfo, a, b, "slnf")
+            if not ok or source == nil then return nil end
+            return build_info(source, line, name, func, true)
+        elseif type(a) == "function" then
+            local source, line, name = dinfo(a, "sln")
+            local nparams, is_vararg = dinfo(a, "a")
+            local info = build_info(source, line, name, a, true)
+            -- For a function argument, "l" is the line it was defined at.
+            info.linedefined, info.currentline = line, -1
+            info.nparams, info.isvararg = nparams, is_vararg
+            return info
+        else
+            -- Add one to the level to skip this shim function. dinfo must be
+            -- called directly (not via pcall), as extra frames would change
+            -- the level the caller asked about.
+            local source, line, name, func = dinfo(a + 1, "slnf")
+            if source == nil then return nil end
+            return build_info(source, line, name, func, true)
+        end
+    end
+end
+
 -- Load in expect from the module path.
 --
 -- Ideally we'd use require, but that is part of the shell, and so is not

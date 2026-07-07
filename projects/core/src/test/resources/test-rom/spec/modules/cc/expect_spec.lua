@@ -31,7 +31,13 @@ describe("cc.expect", function()
                 worker()
             end
 
-            expect.error(trampoline):str_match("^[^:]*expect_spec.lua:31: bad argument #1 to 'worker' %(string expected, got nil%)$")
+            if _VERSION == "Luau" then
+                -- Luau's debug names differ from call-site inference, so cc.expect never includes
+                -- the function name there.
+                expect.error(trampoline):str_match("^[^:]*expect_spec.lua:31: bad argument #1 %(string expected, got nil%)$")
+            else
+                expect.error(trampoline):str_match("^[^:]*expect_spec.lua:31: bad argument #1 to 'worker' %(string expected, got nil%)$")
+            end
         end)
 
         it("supports custom type names", function()

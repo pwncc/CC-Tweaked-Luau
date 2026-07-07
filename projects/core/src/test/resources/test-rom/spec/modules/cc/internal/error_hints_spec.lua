@@ -18,19 +18,19 @@ describe("cc.internal.error_hints", function()
     end
 
     describe("gives hints for 'attempt to OP (a nil value)' errors", function()
-        it("suggests alternative globals", function()
+        it("suggests alternative globals :cobalt_debug", function()
             expect(get_tip_for("pront()")):eq("Did you mean: print?")
         end)
 
-        it("suggests alternative locals", function()
+        it("suggests alternative locals :cobalt_debug", function()
             expect(get_tip_for("local foo; fot()")):eq("Did you mean: foo?")
         end)
 
-        it("suggests alternative table keys", function()
+        it("suggests alternative table keys :cobalt_debug", function()
             expect(get_tip_for("redstone.getinput()")):eq("Did you mean: getInput?")
         end)
 
-        it("suggests multiple table keys", function()
+        it("suggests multiple table keys :cobalt_debug", function()
             expect(get_tip_for("redstone.getAnaloguInput()")):eq("Did you mean: getAnalogInput or getAnalogueInput?")
         end)
     end)

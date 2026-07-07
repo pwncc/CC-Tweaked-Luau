@@ -32,7 +32,7 @@ describe("Coroutines", function()
         in this test suite. Sorry.
         ]]
 
-        it("within debug hooks", function()
+        it("within debug hooks :cobalt_yield", function()
             coroutine_echo(function()
                 local counts = { call = 0, ['return'] = 0, count = 0, line = 0 }
 
@@ -58,7 +58,7 @@ describe("Coroutines", function()
             end)
         end)
 
-        it("within string.gsub", function()
+        it("within string.gsub :cobalt_yield", function()
             local result, count = coroutine_echo(function()
                 return ("hello world"):gsub("%w", function(entry)
                     local x = coroutine.yield(entry)
@@ -97,7 +97,7 @@ describe("Coroutines", function()
             end)
         end)
 
-        it("within table.foreach", function()
+        it("within table.foreach :cobalt_yield", function()
             coroutine_echo(function()
                 local x = { 3, "foo", 4, 1 }
                 local idx = 1
@@ -111,7 +111,7 @@ describe("Coroutines", function()
             end)
         end)
 
-        it("within table.foreachi", function()
+        it("within table.foreachi :cobalt_yield", function()
             coroutine_echo(function()
                 local x = { 3, "foo", 4, 1 }
                 local idx = 1
@@ -125,7 +125,7 @@ describe("Coroutines", function()
             end)
         end)
 
-        describe("within table.sort", function()
+        describe("within table.sort :cobalt_yield", function()
             it("with a yielding comparator", function()
                 coroutine_echo(function()
                     local x = { 32, 2, 4, 13 }
@@ -200,7 +200,7 @@ describe("Coroutines", function()
                 end)
             end)
 
-            it("with an error in the error handler", function()
+            it("with an error in the error handler :cobalt_yield", function()
                 coroutine_echo(function()
                     local ok, msg = xpcall(function()
                         local a, b, c = coroutine.yield(1, 2, 3)
@@ -216,7 +216,7 @@ describe("Coroutines", function()
                 end)
             end)
 
-            it("within the error handler", function()
+            it("within the error handler :cobalt_yield", function()
                 coroutine_echo(function()
                     local ok, msg = xpcall(function()
                         local a, b, c = coroutine.yield(1, 2, 3)
@@ -234,7 +234,7 @@ describe("Coroutines", function()
                 end)
             end)
 
-            it("within the error handler with an error", function()
+            it("within the error handler with an error :cobalt_yield", function()
                 coroutine_echo(function()
                     local ok, msg = xpcall(function()
                         local a, b, c = coroutine.yield(1, 2, 3)
@@ -254,7 +254,7 @@ describe("Coroutines", function()
             end)
         end)
 
-        it("within metamethods", function()
+        it("within metamethods :cobalt_yield", function()
             local create, ops
             create = function(val) return setmetatable({ x = val }, ops) end
             ops = {

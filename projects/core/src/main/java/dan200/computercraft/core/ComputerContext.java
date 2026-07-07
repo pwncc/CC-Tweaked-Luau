@@ -15,6 +15,7 @@ import dan200.computercraft.core.computer.mainthread.MainThreadScheduler;
 import dan200.computercraft.core.computer.mainthread.NoWorkMainThreadScheduler;
 import dan200.computercraft.core.lua.CobaltLuaMachine;
 import dan200.computercraft.core.lua.ILuaMachine;
+import dan200.computercraft.core.lua.luau.LuauMachine;
 import dan200.computercraft.core.lua.MachineEnvironment;
 import dan200.computercraft.core.methods.LuaMethod;
 import dan200.computercraft.core.methods.MethodSupplier;
@@ -86,6 +87,16 @@ public final class ComputerContext {
      */
     public ILuaMachine.Factory luaFactory() {
         return luaFactory;
+    }
+
+    /**
+     * Get the default {@link ILuaMachine.Factory}. This is the Luau runtime when its native library is available on
+     * the current platform, and the (pure-Java) Cobalt runtime otherwise.
+     *
+     * @return The default Lua machine factory.
+     */
+    public static ILuaMachine.Factory defaultLuaFactory() {
+        return LuauMachine.isAvailable() ? LuauMachine::new : CobaltLuaMachine::new;
     }
 
     /**
@@ -239,7 +250,7 @@ public final class ComputerContext {
                 environment,
                 computerScheduler == null ? new ComputerThread(1) : computerScheduler,
                 mainThreadScheduler == null ? new NoWorkMainThreadScheduler() : mainThreadScheduler,
-                luaFactory == null ? CobaltLuaMachine::new : luaFactory,
+                luaFactory == null ? defaultLuaFactory() : luaFactory,
                 LuaMethodSupplier.create(genericMethods == null ? List.of() : genericMethods),
                 PeripheralMethodSupplier.create(genericMethods == null ? List.of() : genericMethods)
             );

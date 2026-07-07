@@ -87,7 +87,10 @@ additional information for the exception machinery on the call stack.
 
 @see can_wrap_errors
 ]]
-local try_barrier = debug.getregistry().cc_try_barrier
+-- The Luau runtime has no debug.getregistry, so fall back to stashing the
+-- barrier in the global table instead.
+local registry = debug.getregistry and debug.getregistry() or _G
+local try_barrier = registry.cc_try_barrier
 if not try_barrier then
     -- We define an extra "bounce" function to prevent f(...) being treated as a
     -- tail call, and so ensure the barrier remains on the stack.
@@ -98,7 +101,7 @@ if not try_barrier then
     -- @param ... The arguments to this function.
     try_barrier = function(parent, f, ...) return bounce(f(...)) end
 
-    debug.getregistry().cc_try_barrier = try_barrier
+    registry.cc_try_barrier = try_barrier
 end
 
 -- Functions that act as a barrier for exceptions.
@@ -142,6 +145,12 @@ local function can_wrap_errors(thread)
     end
 
     return false
+end
+
+if not debug.getinfo or not debug.getlocal then
+    -- The runtime does not support the debug APIs we need to scan the call
+    -- stack (e.g. Luau), so never wrap errors into exceptions.
+    can_wrap_errors = function() return false end
 end
 
 --[[- Wrap an error into an exception, when it is safe to do so.
