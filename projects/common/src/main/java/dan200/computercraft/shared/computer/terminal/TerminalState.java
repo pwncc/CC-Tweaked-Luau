@@ -22,24 +22,32 @@ public class TerminalState {
     private final boolean colour;
     final int width;
     final int height;
+    final int baseWidth;
+    final int baseHeight;
     final int cursorX;
     final int cursorY;
     final boolean cursorBlink;
     final int cursorBgColour;
     final int cursorFgColour;
+    final boolean mouseCapture;
     final byte[] contents;
 
     TerminalState(
-        boolean colour, int width, int height, int cursorX, int cursorY, boolean cursorBlink, int cursorFgColour, int cursorBgColour, byte[] contents
+        boolean colour, int width, int height, int baseWidth, int baseHeight,
+        int cursorX, int cursorY, boolean cursorBlink, int cursorFgColour, int cursorBgColour,
+        boolean mouseCapture, byte[] contents
     ) {
         this.colour = colour;
         this.width = width;
         this.height = height;
+        this.baseWidth = baseWidth;
+        this.baseHeight = baseHeight;
         this.cursorX = cursorX;
         this.cursorY = cursorY;
         this.cursorBlink = cursorBlink;
         this.cursorFgColour = cursorFgColour;
         this.cursorBgColour = cursorBgColour;
+        this.mouseCapture = mouseCapture;
         this.contents = contents;
     }
 
@@ -52,6 +60,8 @@ public class TerminalState {
         colour = buf.readBoolean();
         width = buf.readVarInt();
         height = buf.readVarInt();
+        baseWidth = buf.readVarInt();
+        baseHeight = buf.readVarInt();
         cursorX = buf.readVarInt();
         cursorY = buf.readVarInt();
         cursorBlink = buf.readBoolean();
@@ -59,6 +69,7 @@ public class TerminalState {
         var cursorColour = buf.readByte();
         this.cursorBgColour = (cursorColour >> 4) & 0xF;
         this.cursorFgColour = cursorColour & 0xF;
+        mouseCapture = buf.readBoolean();
 
         contents = buf.readByteArray();
     }
@@ -67,10 +78,13 @@ public class TerminalState {
         buf.writeBoolean(colour);
         buf.writeVarInt(width);
         buf.writeVarInt(height);
+        buf.writeVarInt(baseWidth);
+        buf.writeVarInt(baseHeight);
         buf.writeVarInt(cursorX);
         buf.writeVarInt(cursorY);
         buf.writeBoolean(cursorBlink);
         buf.writeByte(cursorBgColour << 4 | cursorFgColour);
+        buf.writeBoolean(mouseCapture);
 
         buf.writeByteArray(contents);
     }

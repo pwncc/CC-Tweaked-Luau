@@ -65,4 +65,15 @@ public final class ClientComputerInput implements ComputerInput {
     public void mouseScroll(int direction, int x, int y) {
         ClientNetworking.sendToServer(new MouseEventServerMessage(menu, MouseEventServerMessage.Action.SCROLL, direction, x, y));
     }
+
+    @Override
+    public void mouseMove(int x, int y, int subX, int subY) {
+        // The subpixel position rides in the spare "arg" slot.
+        ClientNetworking.sendToServer(new MouseEventServerMessage(menu, MouseEventServerMessage.Action.MOVE, subX + subY * 2, x, y));
+    }
+
+    @Override
+    public void mouseLeave() {
+        ClientNetworking.sendToServer(new MouseEventServerMessage(menu, MouseEventServerMessage.Action.LEAVE, 0, 0, 0));
+    }
 }

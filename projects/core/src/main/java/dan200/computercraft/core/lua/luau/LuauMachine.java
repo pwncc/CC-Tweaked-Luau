@@ -318,6 +318,11 @@ public final class LuauMachine implements ILuaMachine {
             if (environment != null) environment.queueEvent("term_resize");
         }
 
+        if ((flags & 32) != 0) {
+            var capture = fastResp.get() != 0;
+            if (terminal != null) terminal.setMouseCapture(capture);
+        }
+
         if (terminal != null) synchronized (terminal) {
             if ((flags & 1) != 0) {
                 var x = fastResp.getInt();

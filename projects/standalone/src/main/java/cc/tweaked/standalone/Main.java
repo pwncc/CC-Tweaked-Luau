@@ -24,6 +24,7 @@ import org.jetbrains.annotations.Contract;
 import org.jspecify.annotations.Nullable;
 import org.lwjgl.glfw.GLFW;
 import org.lwjgl.glfw.GLFWErrorCallback;
+import org.lwjgl.glfw.GLFWImage;
 import org.lwjgl.opengl.GL;
 import org.lwjgl.opengl.GLUtil;
 import org.lwjgl.system.Checks;
@@ -37,6 +38,7 @@ import java.nio.ByteBuffer;
 import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Objects;
 import java.util.OptionalInt;
@@ -269,7 +271,6 @@ public class Main {
         // Configure GLFW
         glfwDefaultWindowHints();
         glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE); // Hide the window - we manually show it later.
-        glfwWindowHint(GLFW_RESIZABLE, GL_FALSE);// Force the window to remain the terminal size.
 
         // Configure OpenGL
         glfwWindowHint(GLFW_CLIENT_API, GLFW_OPENGL_API);
@@ -280,9 +281,26 @@ public class Main {
         glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
         if (DEBUG) glfwWindowHint(GLFW_CONTEXT_DEBUG, GLFW_TRUE);
 
+        // The base (boot-time) terminal size determines the window's aspect ratio. The terminal may
+        // later be resized (term.setResolution); the renderer squeezes more cells into the same
+        // window, so mouse positions are mapped through the current terminal size.
+        var baseWidth = terminal.getWidth();
+        var baseHeight = terminal.getHeight();
+        var basePixelWidth = MARGIN * 2 + PIXEL_WIDTH * baseWidth;
+        var basePixelHeight = MARGIN * 2 + PIXEL_HEIGHT * baseHeight;
+
+        // Pick the largest integer scale which fits comfortably on the primary monitor.
+        var initialScale = SCALE;
+        var videoMode = glfwGetVideoMode(glfwGetPrimaryMonitor());
+        if (videoMode != null) {
+            initialScale = Math.max(SCALE, Math.min(
+                (int) (videoMode.width() * 0.8 / basePixelWidth),
+                (int) (videoMode.height() * 0.8 / basePixelHeight)
+            ));
+        }
+
         var window = glfwCreateWindow(
-            SCALE * (MARGIN * 2 + PIXEL_WIDTH * terminal.getWidth()),
-            SCALE * (MARGIN * 2 + PIXEL_HEIGHT * terminal.getHeight()),
+            initialScale * basePixelWidth, initialScale * basePixelHeight,
             "CC: Tweaked - Standalone", NULL, NULL
         );
         if (window == NULL) throw new RuntimeException("Failed to create the GLFW window");
@@ -291,19 +309,23 @@ public class Main {
             glfwDestroyWindow(window);
         });
 
+        // The window is freely resizable, but always keeps the terminal's aspect ratio.
+        glfwSetWindowAspectRatio(window, basePixelWidth, basePixelHeight);
+        glfwSetWindowSizeLimits(window, basePixelWidth, basePixelHeight, GLFW_DONT_CARE, GLFW_DONT_CARE);
+
         // Get the window size so we can centre it.
         try (var stack = MemoryStack.stackPush()) {
             var width = stack.mallocInt(1);
             var height = stack.mallocInt(1);
             glfwGetWindowSize(window, width, height);
 
-            // Get the resolution of the primary monitor
-            var mode = glfwGetVideoMode(glfwGetPrimaryMonitor());
-
-            if (mode != null) {
-                glfwSetWindowPos(window, (mode.width() - width.get(0)) / 2, (mode.height() - height.get(0)) / 2);
+            if (videoMode != null) {
+                glfwSetWindowPos(window, (videoMode.width() - width.get(0)) / 2, (videoMode.height() - height.get(0)) / 2);
             }
         }
+
+        // Live window size (in screen coordinates, which cursor positions are also measured in).
+        var windowSize = new int[]{ initialScale * basePixelWidth, initialScale * basePixelHeight };
 
         // Add all our callbacks
         glfwSetKeyCallback(window, (w, key, scancode, action, mods) -> inputState.onKeyEvent(w, key, action, mods));
@@ -311,11 +333,24 @@ public class Main {
         glfwSetDropCallback(window, (w, count, files) -> inputState.onFileDrop(count, files));
         glfwSetMouseButtonCallback(window, (w, button, action, mods) -> inputState.onMouseClick(button, action));
         glfwSetCursorPosCallback(window, (w, x, y) -> {
-            var charX = (int) (((x / SCALE) - MARGIN) / PIXEL_WIDTH);
-            var charY = (int) (((y / SCALE) - MARGIN) / PIXEL_HEIGHT);
-            inputState.onMouseMove(charX, charY);
+            // Map through the quad's UV extents: the terminal (plus scaled margins) spans the window.
+            double termW = terminal.getWidth(), termH = terminal.getHeight();
+            var marginX = MARGIN * termW / baseWidth;
+            var marginY = MARGIN * termH / baseHeight;
+            var rawX = (x / windowSize[0] * (PIXEL_WIDTH * termW + 2 * marginX) - marginX) / PIXEL_WIDTH;
+            var rawY = (y / windowSize[1] * (PIXEL_HEIGHT * termH + 2 * marginY) - marginY) / PIXEL_HEIGHT;
+            var subX = Math.min(Math.max((int) ((rawX - Math.floor(rawX)) * 2), 0), 1);
+            var subY = Math.min(Math.max((int) ((rawY - Math.floor(rawY)) * 3), 0), 2);
+            inputState.onMouseMove((int) rawX, (int) rawY, subX, subY);
+        });
+        glfwSetCursorEnterCallback(window, (w, entered) -> {
+            if (!entered) inputState.onMouseLeave();
         });
         glfwSetScrollCallback(window, (w, xOffset, yOffset) -> inputState.onMouseScroll(yOffset));
+        glfwSetWindowSizeCallback(window, (w, newWidth, newHeight) -> {
+            windowSize[0] = newWidth;
+            windowSize[1] = newHeight;
+        });
 
         glfwMakeContextCurrent(window);
         glfwSwapInterval(1); // Enable v-sync
@@ -323,6 +358,12 @@ public class Main {
 
         // Initialise the OpenGL state
         GL.createCapabilities();
+
+        // Registered only once the context is ready: resizes update the viewport and force a redraw.
+        glfwSetFramebufferSizeCallback(window, (w, fbWidth, fbHeight) -> {
+            glViewport(0, 0, fbWidth, fbHeight);
+            isDirty.set(true);
+        });
         if (DEBUG) {
             GLUtil.setupDebugMessageCallback();
             glDebugMessageControl(GL_DONT_CARE, GL_DONT_CARE, GL_DONT_CARE, (int[]) null, true);
@@ -349,6 +390,8 @@ public class Main {
         glBindBufferBase(GL_UNIFORM_BUFFER, UNIFORM_TERMINAL_DATA, termDataBuffer);
 
         // Create our vertex buffer object. This is just a simple triangle strip of our four corners.
+        // The UVs span the terminal's current pixel extent: when the terminal is resized we rebuild
+        // them, squeezing more (smaller) cells into the same window.
         var termVertices = gl.createBuffer("Terminal Vertices");
         glNamedBufferData(termVertices, new float[]{
             -1.0f, 1.0f, -MARGIN, -MARGIN,
@@ -356,6 +399,7 @@ public class Main {
             1.0f, 1.0f, PIXEL_WIDTH * terminal.getWidth() + MARGIN, -MARGIN,
             1.0f, -1.0f, PIXEL_WIDTH * terminal.getWidth() + MARGIN, PIXEL_HEIGHT * terminal.getHeight() + MARGIN,
         }, GL_STATIC_DRAW);
+        int quadWidth = terminal.getWidth(), quadHeight = terminal.getHeight();
 
         // And our VBA
         var termVertexArray = gl.createVertexArray("Terminal VAO");
@@ -369,20 +413,49 @@ public class Main {
 
         glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
 
-        // We run a single loop for both rendering and ticking computers. This is dubious for all sorts of reason, but
-        // good enough for us.
+        // Pixel-art arrow cursors, swapped in while the program captures the mouse (and draws its
+        // own UI around it). Rendering the pointer at this layer keeps it perfectly smooth,
+        // whatever the terminal's cell grid looks like.
+        var arrowCursors = new HashMap<Integer, Long>();
+        gl.add(() -> {
+            for (var cursor : arrowCursors.values()) {
+                if (cursor != NULL) glfwDestroyCursor(cursor);
+            }
+        });
+
+        // We run a single loop for both rendering and ticking computers. The computer ticks at a
+        // fixed 20Hz, but events are pumped and the terminal redrawn far more often, so the
+        // display follows input with only a few milliseconds of latency.
         var lastTickTime = GLFW.glfwGetTime();
         var lastCursorBlink = false;
+        var cursorScale = 0; // 0 = the normal system cursor
         while (!glfwWindowShouldClose(window)) {
-            // Tick the computer
-            computer.tick();
-            inputState.update();
+            var now = GLFW.glfwGetTime();
+            if (now - lastTickTime >= 0.05) {
+                lastTickTime = now;
+                computer.tick();
+                inputState.update();
+            }
 
             var needRedraw = false;
 
             // Update the terminal data if needed.
             if (isDirty.getAndSet(false)) {
                 needRedraw = true;
+
+                // Remap the quad if the terminal has been resized (term.setResolution).
+                if (terminal.getWidth() != quadWidth || terminal.getHeight() != quadHeight) {
+                    quadWidth = terminal.getWidth();
+                    quadHeight = terminal.getHeight();
+                    var marginX = (float) MARGIN * quadWidth / baseWidth;
+                    var marginY = (float) MARGIN * quadHeight / baseHeight;
+                    glNamedBufferData(termVertices, new float[]{
+                        -1.0f, 1.0f, -marginX, -marginY,
+                        -1.0f, -1.0f, -marginX, PIXEL_HEIGHT * quadHeight + marginY,
+                        1.0f, 1.0f, PIXEL_WIDTH * quadWidth + marginX, -marginY,
+                        1.0f, -1.0f, PIXEL_WIDTH * quadWidth + marginX, PIXEL_HEIGHT * quadHeight + marginY,
+                    }, GL_STATIC_DRAW);
+                }
 
                 try (var stack = MemoryStack.stackPush()) {
                     var buffer = stack.malloc(terminal.getWidth() * terminal.getHeight() * 3);
@@ -397,8 +470,17 @@ public class Main {
                 }
             }
 
+            // Swap in the arrow cursor while the program captures the mouse (term.setMouseCapture),
+            // scaled with the window so it keeps a sensible physical size.
+            var wantScale = terminal.getMouseCapture() ? Math.max(2, Math.round(windowSize[1] / 400f)) : 0;
+            if (wantScale != cursorScale) {
+                cursorScale = wantScale;
+                var cursor = wantScale == 0 ? NULL : arrowCursors.computeIfAbsent(wantScale, Main::createArrowCursor);
+                glfwSetCursor(window, cursor);
+            }
+
             // Update the cursor blink if needed.
-            var cursorBlink = terminal.getCursorBlink() && (int) (lastTickTime * 20 / 8) % 2 == 0;
+            var cursorBlink = terminal.getCursorBlink() && (int) (now * 20 / 8) % 2 == 0;
             if (cursorBlink != lastCursorBlink) {
                 needRedraw = true;
                 glProgramUniform1i(termProgram, UNIFORM_CURSOR_BLINK, cursorBlink ? 1 : 0);
@@ -416,13 +498,50 @@ public class Main {
                 glfwSwapBuffers(window); // swap the color buffers
             }
 
-            // Then wait for the next frame.
-            var deadline = lastTickTime + 0.05;
-            lastTickTime = GLFW.glfwGetTime();
-            while (lastTickTime < deadline) {
-                GLFW.glfwWaitEventsTimeout(deadline - lastTickTime);
-                lastTickTime = GLFW.glfwGetTime();
+            // Pump events (waking early on input) and loop again; the 5ms timeout bounds both input
+            // latency and idle CPU usage.
+            GLFW.glfwWaitEventsTimeout(0.005);
+        }
+    }
+
+    /**
+     * The classic arrow pointer. {@code X} is the black outline, {@code o} the white fill.
+     */
+    private static final String[] ARROW_PATTERN = {
+        "X          ",
+        "XX         ",
+        "XoX        ",
+        "XooX       ",
+        "XoooX      ",
+        "XooooX     ",
+        "XoooooX    ",
+        "XooooooX   ",
+        "XoooooooX  ",
+        "XooooooooX ",
+        "XoooooXXXXX",
+        "XooXooX    ",
+        "XoX XooX   ",
+        "XX  XooX   ",
+        "X    XooX  ",
+        "     XooX  ",
+        "      XX   ",
+    };
+
+    private static long createArrowCursor(int scale) {
+        var width = ARROW_PATTERN[0].length() * scale;
+        var height = ARROW_PATTERN.length * scale;
+        try (var stack = MemoryStack.stackPush()) {
+            var pixels = stack.malloc(width * height * 4);
+            for (var y = 0; y < height; y++) {
+                for (var x = 0; x < width; x++) {
+                    var kind = ARROW_PATTERN[y / scale].charAt(x / scale);
+                    var fill = kind == 'o' ? (byte) 0xFF : (byte) 0;
+                    pixels.put(fill).put(fill).put(fill).put(kind != ' ' ? (byte) 0xFF : (byte) 0);
+                }
             }
+            pixels.flip();
+            var image = GLFWImage.malloc(stack).width(width).height(height).pixels(pixels);
+            return glfwCreateCursor(image, 0, 0);
         }
     }
 

@@ -103,8 +103,12 @@ public class InputState {
         }
     }
 
-    public void onMouseMove(int mouseX, int mouseY) {
-        input.mouseMove(mouseX + 1, mouseY + 1);
+    public void onMouseMove(int mouseX, int mouseY, int subX, int subY) {
+        input.mouseMove(mouseX + 1, mouseY + 1, subX, subY);
+    }
+
+    public void onMouseLeave() {
+        input.mouseLeave();
     }
 
     public void onMouseScroll(double yOffset) {

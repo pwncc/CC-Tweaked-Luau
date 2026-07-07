@@ -77,8 +77,9 @@ enum Flags : int {
 static const int MAX_DEPTH = 128;
 
 // Size of the shared direct buffers used for the fast call path. Payloads
-// exceeding this fall back to the byte[] path.
-static const size_t FAST_BUFFER_SIZE = 256 * 1024;
+// exceeding this fall back to the byte[] path. Sized to hold a full terminal
+// sync at the maximum resolution (10x: 510x190 cells is ~300KB of line data).
+static const size_t FAST_BUFFER_SIZE = 1024 * 1024;
 
 // ---------------------------------------------------------------------------
 // Per-machine state
@@ -93,6 +94,8 @@ struct NativeTerm {
     int baseWidth = 0, baseHeight = 0;
     bool colour = true;
     bool resizeDirty = false;
+    bool mouseCapture = false;
+    bool mouseCaptureDirty = false;
 
     // Row-major width*height byte planes. fg/bg hold raw bytes (usually hex
     // digits), mirroring Java's TextBuffer semantics.
@@ -112,7 +115,7 @@ struct NativeTerm {
     double lastSync = 0;
 
     bool anyDirty() const {
-        return cursorDirty || paletteDirty || anyLineDirty || resizeDirty;
+        return cursorDirty || paletteDirty || anyLineDirty || resizeDirty || mouseCaptureDirty;
     }
 
     void markLine(int y) {
@@ -1167,7 +1170,7 @@ static int termNativePaletteColour(lua_State* L) {
 static int termSetResolution(lua_State* L) {
     NativeTerm* t = getTerm(L);
     int scale = checkJavaInt(L, 1);
-    if (scale < 1 || scale > 3) luaL_error(L, "Expected scale in range 1-3");
+    if (scale < 1 || scale > 10) luaL_error(L, "Expected scale in range 1-10");
 
     int newWidth = t->baseWidth * scale;
     int newHeight = t->baseHeight * scale;
@@ -1203,6 +1206,21 @@ static int termGetResolution(lua_State* L) {
     return 1;
 }
 
+static int termSetMouseCapture(lua_State* L) {
+    NativeTerm* t = getTerm(L);
+    bool capture = checkJavaBoolean(L, 1);
+    if (t->mouseCapture != capture) {
+        t->mouseCapture = capture;
+        t->mouseCaptureDirty = true;
+    }
+    return 0;
+}
+
+static int termGetMouseCapture(lua_State* L) {
+    lua_pushboolean(L, getTerm(L)->mouseCapture);
+    return 1;
+}
+
 static const luaL_Reg TERM_METHODS[] = {
     { "write", termWrite },
     { "blit", termBlit },
@@ -1232,6 +1250,8 @@ static const luaL_Reg TERM_METHODS[] = {
     { "nativePaletteColor", termNativePaletteColour },
     { "setResolution", termSetResolution },
     { "getResolution", termGetResolution },
+    { "setMouseCapture", termSetMouseCapture },
+    { "getMouseCapture", termGetMouseCapture },
     { nullptr, nullptr },
 };
 
@@ -1893,6 +1913,7 @@ JNIEXPORT jint JNICALL Java_dan200_computercraft_core_lua_luau_LuauNative_syncTe
     if (term->anyLineDirty) flags |= 4;
     if (redstone != nullptr && redstone->outputDirty) flags |= 8;
     if (term->resizeDirty) flags |= 16;
+    if (term->mouseCaptureDirty) flags |= 32;
     w.u8(flags);
 
     // The resize must come first: line payloads below use the new width.
@@ -1900,6 +1921,8 @@ JNIEXPORT jint JNICALL Java_dan200_computercraft_core_lua_luau_LuauNative_syncTe
         w.i32(term->width);
         w.i32(term->height);
     }
+
+    if (term->mouseCaptureDirty) w.u8(term->mouseCapture ? 1 : 0);
 
     if (term->cursorDirty) {
         w.i32(term->cursorX);
@@ -1944,6 +1967,7 @@ JNIEXPORT jint JNICALL Java_dan200_computercraft_core_lua_luau_LuauNative_syncTe
     term->paletteDirty = false;
     term->anyLineDirty = false;
     term->resizeDirty = false;
+    term->mouseCaptureDirty = false;
     std::fill(term->lineDirty.begin(), term->lineDirty.end(), 0);
     if (redstone != nullptr) redstone->outputDirty = false;
     return (jint) w.pos;

@@ -51,6 +51,8 @@ public final class MouseEventServerMessage extends ComputerServerMessage {
             case DRAG -> input.mouseDrag(arg, x, y);
             case UP -> input.mouseUp(arg, x, y);
             case SCROLL -> input.mouseScroll(arg, x, y);
+            case MOVE -> input.mouseMove(x, y, arg % 2, arg / 2);
+            case LEAVE -> input.mouseLeave();
         }
     }
 
@@ -60,6 +62,6 @@ public final class MouseEventServerMessage extends ComputerServerMessage {
     }
 
     public enum Action {
-        CLICK, DRAG, UP, SCROLL,
+        CLICK, DRAG, UP, SCROLL, MOVE, LEAVE,
     }
 }

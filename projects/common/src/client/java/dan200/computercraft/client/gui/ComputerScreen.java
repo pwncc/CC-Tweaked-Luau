@@ -25,8 +25,8 @@ public final class ComputerScreen<T extends AbstractComputerMenu> extends Abstra
     public ComputerScreen(T container, Inventory player, Component title) {
         super(container, player, title, BORDER);
 
-        imageWidth = TerminalWidget.getWidth(terminalData.getWidth()) + BORDER * 2 + AbstractComputerMenu.SIDEBAR_WIDTH;
-        imageHeight = TerminalWidget.getHeight(terminalData.getHeight()) + BORDER * 2;
+        imageWidth = TerminalWidget.getWidth(terminalData.getBaseWidth()) + BORDER * 2 + AbstractComputerMenu.SIDEBAR_WIDTH;
+        imageHeight = TerminalWidget.getHeight(terminalData.getBaseHeight()) + BORDER * 2;
     }
 
     @Override
