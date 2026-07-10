@@ -91,4 +91,36 @@ bench("pattern_match", function()
     return count
 end)
 
+-- Window compositing: a child window writing through a parent window onto
+-- the terminal, with periodic scrolls and full redraws - the multishell /
+-- MineOS hot path.
+local function windowWorkload(create)
+    return function()
+        local t = term.native and term.native() or term
+        local root = create(t, 1, 1, 51, 19)
+        local child = create(root, 2, 2, 40, 10)
+        for i = 1, 2e4 do
+            child.setCursorPos(1, i % 10 + 1)
+            child.write("The quick brown fox jumps over the lazy")
+            if i % 100 == 0 then
+                child.scroll(1)
+                root.redraw()
+            end
+        end
+    end
+end
+
+bench("window_api", windowWorkload(window.create))
+
+-- On runtimes with a native window API, also benchmark the reference Lua
+-- implementation for comparison.
+if _CC_NATIVE_WINDOW then
+    local env = setmetatable({ _CC_NATIVE_WINDOW = false }, { __index = _ENV })
+    local fn = loadfile("rom/apis/window.lua", nil, env)
+    if fn then
+        fn()
+        bench("window_lua", windowWorkload(env.create))
+    end
+end
+
 benchmark.finish()

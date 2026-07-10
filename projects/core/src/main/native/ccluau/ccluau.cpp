@@ -1256,6 +1256,667 @@ static const luaL_Reg TERM_METHODS[] = {
 };
 
 // ---------------------------------------------------------------------------
+// Native windows: a C++ implementation of window.create with the exact
+// semantics of rom/apis/window.lua (the reference implementation). Windows
+// buffer their contents and write through to their parent when visible.
+// Parents may be the machine's native terminal or another native window
+// (both handled entirely in C++), or any Lua redirect object (monitors,
+// mirrors, ...), reached by calling its methods.
+//
+// Dispatch helpers take `tbl`, the (pseudo-)stack index of the window's own
+// table; the parent redirect lives in a field of that table, which both
+// anchors the ancestor chain against GC during a call and lets write-through
+// recursion locate each level's parent without upvalue tricks.
+// ---------------------------------------------------------------------------
+struct NativeWindow {
+    int x = 1, y = 1;             // 1-based position within the parent
+    int width = 0, height = 0;
+    bool visible = true;
+    bool colour = true;
+    int cursorX = 1, cursorY = 1; // 1-based; may be out of bounds
+    bool blink = false;
+    int curFg = 0, curBg = 15;    // palette indices
+    std::string text, fg, bg;     // row-major width*height
+    double palette[16][3] = {};
+
+    // Fast-path parents, resolved at creation/reposition. When both are
+    // unset, the parent is a Lua redirect table.
+    bool parentIsTerm = false;
+    NativeWindow* parentWin = nullptr;
+};
+
+static const char* NW_SELF_FIELD = "__ccluau_window";
+static const char* NW_PARENT_FIELD = "__ccluau_parent";
+
+// Closure upvalues on every window method: 1 = the userdata, 2 = the table.
+static NativeWindow* nwSelf(lua_State* L) {
+    return static_cast<NativeWindow*>(lua_touserdata(L, lua_upvalueindex(1)));
+}
+
+// Call parent.<name>(...) on a Lua-redirect parent. nargs arguments must
+// already be pushed; the parent table is read from the window's table.
+static void nwCallLuaParent(lua_State* L, int tbl, const char* name, int nargs) {
+    lua_getfield(L, tbl, NW_PARENT_FIELD);
+    lua_getfield(L, -1, name);
+    lua_remove(L, -2);
+    lua_insert(L, -nargs - 1);
+    lua_call(L, nargs, 0);
+}
+
+static void nwFillLine(NativeWindow* w, int line, char fgChar, char bgChar) {
+    size_t row = (size_t) (line - 1) * w->width;
+    memset(&w->text[row], ' ', (size_t) w->width);
+    memset(&w->fg[row], fgChar, (size_t) w->width);
+    memset(&w->bg[row], bgChar, (size_t) w->width);
+}
+
+static void nwBlitAt(lua_State* L, NativeWindow* w, int tbl, int atX, int atY, const char* txt, const char* fgs, const char* bgs, int len);
+
+// Write a run of cells to the parent at a 1-based parent position.
+static void nwParentBlit(lua_State* L, NativeWindow* w, int tbl, int px, int py, const char* txt, const char* fgs, const char* bgs, int len) {
+    if (w->parentIsTerm) {
+        NativeTerm* t = getMachine(L)->term;
+        if (t == nullptr) return;
+        int x = px - 1, y = py - 1;
+        if (y < 0 || y >= t->height || len <= 0) return;
+        int start = x < 0 ? 0 : x;
+        long long endL = (long long) x + len;
+        int end = endL > t->width ? t->width : (int) endL;
+        if (start >= end) return;
+        size_t row = (size_t) y * t->width;
+        memcpy(t->text.data() + row + start, txt + (start - x), (size_t) (end - start));
+        memcpy(t->fg.data() + row + start, fgs + (start - x), (size_t) (end - start));
+        memcpy(t->bg.data() + row + start, bgs + (start - x), (size_t) (end - start));
+        t->markLine(y);
+    } else if (w->parentWin != nullptr) {
+        lua_getfield(L, tbl, NW_PARENT_FIELD);
+        nwBlitAt(L, w->parentWin, lua_gettop(L), px, py, txt, fgs, bgs, len);
+        lua_pop(L, 1);
+    } else {
+        lua_pushinteger(L, px);
+        lua_pushinteger(L, py);
+        nwCallLuaParent(L, tbl, "setCursorPos", 2);
+        lua_pushlstring(L, txt, (size_t) len);
+        lua_pushlstring(L, fgs, (size_t) len);
+        lua_pushlstring(L, bgs, (size_t) len);
+        nwCallLuaParent(L, tbl, "blit", 3);
+    }
+}
+
+static void nwParentSetCursor(lua_State* L, NativeWindow* w, int tbl, int px, int py) {
+    if (w->parentIsTerm) {
+        NativeTerm* t = getMachine(L)->term;
+        if (t == nullptr) return;
+        if (t->cursorX != px - 1 || t->cursorY != py - 1) {
+            t->cursorX = px - 1;
+            t->cursorY = py - 1;
+            t->cursorDirty = true;
+        }
+    } else if (w->parentWin != nullptr) {
+        NativeWindow* p = w->parentWin;
+        p->cursorX = px;
+        p->cursorY = py;
+        if (p->visible) {
+            lua_getfield(L, tbl, NW_PARENT_FIELD);
+            int ptbl = lua_gettop(L);
+            if (px >= 1 && py >= 1 && px <= p->width && py <= p->height) {
+                nwParentSetCursor(L, p, ptbl, p->x + px - 1, p->y + py - 1);
+            } else {
+                nwParentSetCursor(L, p, ptbl, 0, 0);
+            }
+            lua_pop(L, 1);
+        }
+    } else {
+        lua_pushinteger(L, px);
+        lua_pushinteger(L, py);
+        nwCallLuaParent(L, tbl, "setCursorPos", 2);
+    }
+}
+
+static void nwParentSetTextColour(lua_State* L, NativeWindow* w, int tbl, int idx) {
+    if (w->parentIsTerm) {
+        NativeTerm* t = getMachine(L)->term;
+        if (t == nullptr) return;
+        if (t->curFg != idx) {
+            t->curFg = idx;
+            t->cursorDirty = true;
+        }
+    } else if (w->parentWin != nullptr) {
+        NativeWindow* p = w->parentWin;
+        p->curFg = idx;
+        if (p->visible) {
+            lua_getfield(L, tbl, NW_PARENT_FIELD);
+            nwParentSetTextColour(L, p, lua_gettop(L), idx);
+            lua_pop(L, 1);
+        }
+    } else {
+        lua_pushnumber(L, (double) (1 << idx));
+        nwCallLuaParent(L, tbl, "setTextColor", 1);
+    }
+}
+
+static void nwParentSetBlink(lua_State* L, NativeWindow* w, int tbl, bool blink) {
+    if (w->parentIsTerm) {
+        NativeTerm* t = getMachine(L)->term;
+        if (t == nullptr) return;
+        if (t->blink != blink) {
+            t->blink = blink;
+            t->cursorDirty = true;
+        }
+    } else if (w->parentWin != nullptr) {
+        NativeWindow* p = w->parentWin;
+        p->blink = blink;
+        if (p->visible) {
+            lua_getfield(L, tbl, NW_PARENT_FIELD);
+            nwParentSetBlink(L, p, lua_gettop(L), blink);
+            lua_pop(L, 1);
+        }
+    } else {
+        lua_pushboolean(L, blink);
+        nwCallLuaParent(L, tbl, "setCursorBlink", 1);
+    }
+}
+
+static void nwParentSetPalette(lua_State* L, NativeWindow* w, int tbl, int idx, double r, double g, double b) {
+    if (w->parentIsTerm) {
+        NativeTerm* t = getMachine(L)->term;
+        if (t == nullptr) return;
+        t->palette[idx][0] = r;
+        t->palette[idx][1] = g;
+        t->palette[idx][2] = b;
+        t->paletteDirty = true;
+    } else if (w->parentWin != nullptr) {
+        NativeWindow* p = w->parentWin;
+        p->palette[idx][0] = r;
+        p->palette[idx][1] = g;
+        p->palette[idx][2] = b;
+        if (p->visible) {
+            lua_getfield(L, tbl, NW_PARENT_FIELD);
+            nwParentSetPalette(L, p, lua_gettop(L), idx, r, g, b);
+            lua_pop(L, 1);
+        }
+    } else {
+        lua_pushnumber(L, (double) (1 << idx));
+        lua_pushnumber(L, r);
+        lua_pushnumber(L, g);
+        lua_pushnumber(L, b);
+        nwCallLuaParent(L, tbl, "setPaletteColour", 4);
+    }
+}
+
+// Write a run of cells into a window's buffer at a 1-based position, without
+// touching its cursor, and forward it to its parent if visible. This is the
+// write-through path taken when a child window renders into this one.
+static void nwBlitAt(lua_State* L, NativeWindow* w, int tbl, int atX, int atY, const char* txt, const char* fgs, const char* bgs, int len) {
+    if (atY < 1 || atY > w->height || len <= 0) return;
+    int x = atX - 1; // 0-based
+    int start = x < 0 ? 0 : x;
+    long long endL = (long long) x + len;
+    int end = endL > w->width ? w->width : (int) endL;
+    if (start >= end) return;
+    size_t row = (size_t) (atY - 1) * w->width;
+    memcpy(&w->text[row + start], txt + (start - x), (size_t) (end - start));
+    memcpy(&w->fg[row + start], fgs + (start - x), (size_t) (end - start));
+    memcpy(&w->bg[row + start], bgs + (start - x), (size_t) (end - start));
+    if (w->visible) {
+        nwParentBlit(L, w, tbl, w->x + start, w->y + atY - 1, &w->text[row + start], &w->fg[row + start], &w->bg[row + start], end - start);
+    }
+}
+
+static void nwRedrawLine(lua_State* L, NativeWindow* w, int tbl, int line) {
+    size_t row = (size_t) (line - 1) * w->width;
+    nwParentBlit(L, w, tbl, w->x, w->y + line - 1, &w->text[row], &w->fg[row], &w->bg[row], w->width);
+}
+
+static void nwRedrawLines(lua_State* L, NativeWindow* w, int tbl) {
+    for (int line = 1; line <= w->height; line++) nwRedrawLine(L, w, tbl, line);
+}
+
+static void nwUpdateCursorPos(lua_State* L, NativeWindow* w, int tbl) {
+    if (w->cursorX >= 1 && w->cursorY >= 1 && w->cursorX <= w->width && w->cursorY <= w->height) {
+        nwParentSetCursor(L, w, tbl, w->x + w->cursorX - 1, w->y + w->cursorY - 1);
+    } else {
+        nwParentSetCursor(L, w, tbl, 0, 0);
+    }
+}
+
+// The full redraw: lines, palette, cursor blink/colour/position.
+static void nwRedraw(lua_State* L, NativeWindow* w, int tbl) {
+    if (!w->visible) return;
+    nwRedrawLines(L, w, tbl);
+    for (int i = 0; i < 16; i++) {
+        nwParentSetPalette(L, w, tbl, i, w->palette[i][0], w->palette[i][1], w->palette[i][2]);
+    }
+    nwParentSetBlink(L, w, tbl, w->blink);
+    nwParentSetTextColour(L, w, tbl, w->curFg);
+    nwUpdateCursorPos(L, w, tbl);
+}
+
+// The equivalent of window.lua's internalBlit: write at the cursor, advance
+// it, and refresh the parent cursor state.
+static void nwInternalBlit(lua_State* L, NativeWindow* w, int tbl, const char* txt, const char* fgs, const char* bgs, int len) {
+    nwBlitAt(L, w, tbl, w->cursorX, w->cursorY, txt, fgs, bgs, len);
+    w->cursorX += len;
+    if (w->visible) {
+        nwParentSetTextColour(L, w, tbl, w->curFg);
+        nwUpdateCursorPos(L, w, tbl);
+    }
+}
+
+static int nwWrite(lua_State* L) {
+    NativeWindow* w = nwSelf(L);
+    size_t len;
+    const char* s;
+    if (lua_isnone(L, 1)) {
+        s = "nil";
+        len = 3;
+    } else {
+        s = luaL_tolstring(L, 1, &len);
+    }
+    std::string fgs(len, HEX_DIGITS[w->curFg]);
+    std::string bgs(len, HEX_DIGITS[w->curBg]);
+    nwInternalBlit(L, w, lua_upvalueindex(2), s, fgs.data(), bgs.data(), (int) len);
+    return 0;
+}
+
+static int nwBlit(lua_State* L) {
+    NativeWindow* w = nwSelf(L);
+    size_t textLen, fgLen, bgLen;
+    const char* txt = checkJavaString(L, 1, &textLen);
+    const char* fgs = checkJavaString(L, 2, &fgLen);
+    const char* bgs = checkJavaString(L, 3, &bgLen);
+    if (fgLen != textLen || bgLen != textLen) luaL_error(L, "Arguments must be the same length");
+
+    std::string fgLower(fgs, fgLen), bgLower(bgs, bgLen);
+    for (auto& c : fgLower) c = (char) tolower((unsigned char) c);
+    for (auto& c : bgLower) c = (char) tolower((unsigned char) c);
+    nwInternalBlit(L, w, lua_upvalueindex(2), txt, fgLower.data(), bgLower.data(), (int) textLen);
+    return 0;
+}
+
+static int nwClear(lua_State* L) {
+    NativeWindow* w = nwSelf(L);
+    for (int line = 1; line <= w->height; line++) {
+        nwFillLine(w, line, HEX_DIGITS[w->curFg], HEX_DIGITS[w->curBg]);
+    }
+    if (w->visible) {
+        int tbl = lua_upvalueindex(2);
+        nwRedrawLines(L, w, tbl);
+        nwParentSetTextColour(L, w, tbl, w->curFg);
+        nwUpdateCursorPos(L, w, tbl);
+    }
+    return 0;
+}
+
+static int nwClearLine(lua_State* L) {
+    NativeWindow* w = nwSelf(L);
+    if (w->cursorY >= 1 && w->cursorY <= w->height) {
+        nwFillLine(w, w->cursorY, HEX_DIGITS[w->curFg], HEX_DIGITS[w->curBg]);
+        if (w->visible) {
+            int tbl = lua_upvalueindex(2);
+            nwRedrawLine(L, w, tbl, w->cursorY);
+            nwParentSetTextColour(L, w, tbl, w->curFg);
+            nwUpdateCursorPos(L, w, tbl);
+        }
+    }
+    return 0;
+}
+
+static int nwGetCursorPos(lua_State* L) {
+    NativeWindow* w = nwSelf(L);
+    lua_pushinteger(L, w->cursorX);
+    lua_pushinteger(L, w->cursorY);
+    return 2;
+}
+
+static int nwSetCursorPos(lua_State* L) {
+    NativeWindow* w = nwSelf(L);
+    w->cursorX = (int) std::floor(checkJavaFiniteNumber(L, 1));
+    w->cursorY = (int) std::floor(checkJavaFiniteNumber(L, 2));
+    if (w->visible) nwUpdateCursorPos(L, w, lua_upvalueindex(2));
+    return 0;
+}
+
+static int nwSetCursorBlink(lua_State* L) {
+    NativeWindow* w = nwSelf(L);
+    w->blink = checkJavaBoolean(L, 1);
+    if (w->visible) nwParentSetBlink(L, w, lua_upvalueindex(2), w->blink);
+    return 0;
+}
+
+static int nwGetCursorBlink(lua_State* L) {
+    lua_pushboolean(L, nwSelf(L)->blink);
+    return 1;
+}
+
+static int nwIsColour(lua_State* L) {
+    lua_pushboolean(L, nwSelf(L)->colour);
+    return 1;
+}
+
+static int nwSetTextColour(lua_State* L) {
+    NativeWindow* w = nwSelf(L);
+    w->curFg = parseColour(L, 1);
+    if (w->visible) nwParentSetTextColour(L, w, lua_upvalueindex(2), w->curFg);
+    return 0;
+}
+
+static int nwSetBackgroundColour(lua_State* L) {
+    NativeWindow* w = nwSelf(L);
+    w->curBg = parseColour(L, 1);
+    return 0;
+}
+
+static int nwGetTextColour(lua_State* L) {
+    lua_pushnumber(L, (double) (1 << nwSelf(L)->curFg));
+    return 1;
+}
+
+static int nwGetBackgroundColour(lua_State* L) {
+    lua_pushnumber(L, (double) (1 << nwSelf(L)->curBg));
+    return 1;
+}
+
+static int nwSetPaletteColour(lua_State* L) {
+    NativeWindow* w = nwSelf(L);
+    int idx = parseColour(L, 1);
+    double r, g, b;
+    if (lua_type(L, 2) == LUA_TNUMBER && lua_isnoneornil(L, 3) && lua_isnoneornil(L, 4)) {
+        // A packed 24-bit RGB value (colours.unpackRGB).
+        int rgb = checkJavaInt(L, 2);
+        r = ((rgb >> 16) & 0xFF) / 255.0;
+        g = ((rgb >> 8) & 0xFF) / 255.0;
+        b = (rgb & 0xFF) / 255.0;
+    } else {
+        r = checkJavaFiniteNumber(L, 2);
+        g = checkJavaFiniteNumber(L, 3);
+        b = checkJavaFiniteNumber(L, 4);
+    }
+    w->palette[idx][0] = r;
+    w->palette[idx][1] = g;
+    w->palette[idx][2] = b;
+    if (w->visible) nwParentSetPalette(L, w, lua_upvalueindex(2), idx, r, g, b);
+    return 0;
+}
+
+static int nwGetPaletteColour(lua_State* L) {
+    NativeWindow* w = nwSelf(L);
+    int idx = parseColour(L, 1);
+    lua_pushnumber(L, w->palette[idx][0]);
+    lua_pushnumber(L, w->palette[idx][1]);
+    lua_pushnumber(L, w->palette[idx][2]);
+    return 3;
+}
+
+static int nwGetSize(lua_State* L) {
+    NativeWindow* w = nwSelf(L);
+    lua_pushinteger(L, w->width);
+    lua_pushinteger(L, w->height);
+    return 2;
+}
+
+static int nwScroll(lua_State* L) {
+    NativeWindow* w = nwSelf(L);
+    int diff = checkJavaInt(L, 1);
+    if (diff == 0 || w->height == 0) return 0;
+
+    std::string newText(w->text.size(), ' ');
+    std::string newFg(w->fg.size(), HEX_DIGITS[w->curFg]);
+    std::string newBg(w->bg.size(), HEX_DIGITS[w->curBg]);
+    for (int line = 0; line < w->height; line++) {
+        long long from = (long long) line + diff;
+        if (from >= 0 && from < w->height) {
+            size_t row = (size_t) line * w->width, fromRow = (size_t) from * w->width;
+            memcpy(&newText[row], &w->text[fromRow], (size_t) w->width);
+            memcpy(&newFg[row], &w->fg[fromRow], (size_t) w->width);
+            memcpy(&newBg[row], &w->bg[fromRow], (size_t) w->width);
+        }
+    }
+    w->text.swap(newText);
+    w->fg.swap(newFg);
+    w->bg.swap(newBg);
+    if (w->visible) {
+        int tbl = lua_upvalueindex(2);
+        nwRedrawLines(L, w, tbl);
+        nwParentSetTextColour(L, w, tbl, w->curFg);
+        nwUpdateCursorPos(L, w, tbl);
+    }
+    return 0;
+}
+
+static int nwGetLine(lua_State* L) {
+    NativeWindow* w = nwSelf(L);
+    int y = (int) std::floor(checkJavaFiniteNumber(L, 1));
+    if (y < 1 || y > w->height) luaL_error(L, "Line is out of range.");
+    size_t row = (size_t) (y - 1) * w->width;
+    lua_pushlstring(L, &w->text[row], (size_t) w->width);
+    lua_pushlstring(L, &w->fg[row], (size_t) w->width);
+    lua_pushlstring(L, &w->bg[row], (size_t) w->width);
+    return 3;
+}
+
+static int nwSetVisible(lua_State* L) {
+    NativeWindow* w = nwSelf(L);
+    bool visible = checkJavaBoolean(L, 1);
+    if (w->visible != visible) {
+        w->visible = visible;
+        if (visible) nwRedraw(L, w, lua_upvalueindex(2));
+    }
+    return 0;
+}
+
+static int nwIsVisible(lua_State* L) {
+    lua_pushboolean(L, nwSelf(L)->visible);
+    return 1;
+}
+
+static int nwRedrawMethod(lua_State* L) {
+    nwRedraw(L, nwSelf(L), lua_upvalueindex(2));
+    return 0;
+}
+
+static int nwRestoreCursor(lua_State* L) {
+    NativeWindow* w = nwSelf(L);
+    if (w->visible) {
+        int tbl = lua_upvalueindex(2);
+        nwParentSetBlink(L, w, tbl, w->blink);
+        nwParentSetTextColour(L, w, tbl, w->curFg);
+        nwUpdateCursorPos(L, w, tbl);
+    }
+    return 0;
+}
+
+static int nwGetPosition(lua_State* L) {
+    NativeWindow* w = nwSelf(L);
+    lua_pushinteger(L, w->x);
+    lua_pushinteger(L, w->y);
+    return 2;
+}
+
+// Resolve the fast-path parent pointers for a parent table at the given index.
+static void nwResolveParent(lua_State* L, NativeWindow* w, int parentIdx) {
+    w->parentIsTerm = false;
+    w->parentWin = nullptr;
+    lua_getfield(L, parentIdx, "__ccluau_term");
+    if (lua_toboolean(L, -1)) w->parentIsTerm = true;
+    lua_pop(L, 1);
+    if (!w->parentIsTerm) {
+        lua_getfield(L, parentIdx, NW_SELF_FIELD);
+        if (lua_isuserdata(L, -1)) w->parentWin = static_cast<NativeWindow*>(lua_touserdata(L, -1));
+        lua_pop(L, 1);
+    }
+}
+
+static int nwReposition(lua_State* L) {
+    NativeWindow* w = nwSelf(L);
+    int newX = (int) std::floor(checkJavaFiniteNumber(L, 1));
+    int newY = (int) std::floor(checkJavaFiniteNumber(L, 2));
+
+    bool resize = !lua_isnoneornil(L, 3) || !lua_isnoneornil(L, 4);
+    int newWidth = w->width, newHeight = w->height;
+    if (resize) {
+        newWidth = checkJavaInt(L, 3);
+        newHeight = checkJavaInt(L, 4);
+        if (newWidth < 0) newWidth = 0;
+        if (newHeight < 0) newHeight = 0;
+    }
+    if (!lua_isnoneornil(L, 5)) {
+        if (lua_type(L, 5) != LUA_TTABLE) {
+            luaL_error(L, "bad argument #5 (table expected, got %s)", displayTypeName(L, 5));
+        }
+        nwResolveParent(L, w, 5);
+        lua_pushvalue(L, 5);
+        lua_setfield(L, lua_upvalueindex(2), NW_PARENT_FIELD);
+    }
+
+    w->x = newX;
+    w->y = newY;
+
+    if (resize && (newWidth != w->width || newHeight != w->height)) {
+        size_t newSize = (size_t) newWidth * newHeight;
+        std::string newText(newSize, ' ');
+        std::string newFg(newSize, HEX_DIGITS[w->curFg]);
+        std::string newBg(newSize, HEX_DIGITS[w->curBg]);
+        int copyW = newWidth < w->width ? newWidth : w->width;
+        int copyH = newHeight < w->height ? newHeight : w->height;
+        for (int line = 0; line < copyH; line++) {
+            memcpy(&newText[(size_t) line * newWidth], &w->text[(size_t) line * w->width], (size_t) copyW);
+            memcpy(&newFg[(size_t) line * newWidth], &w->fg[(size_t) line * w->width], (size_t) copyW);
+            memcpy(&newBg[(size_t) line * newWidth], &w->bg[(size_t) line * w->width], (size_t) copyW);
+        }
+        w->text.swap(newText);
+        w->fg.swap(newFg);
+        w->bg.swap(newBg);
+        w->width = newWidth;
+        w->height = newHeight;
+    }
+
+    if (w->visible) nwRedraw(L, w, lua_upvalueindex(2));
+    return 0;
+}
+
+static const luaL_Reg NW_METHODS[] = {
+    { "write", nwWrite },
+    { "blit", nwBlit },
+    { "clear", nwClear },
+    { "clearLine", nwClearLine },
+    { "getCursorPos", nwGetCursorPos },
+    { "setCursorPos", nwSetCursorPos },
+    { "setCursorBlink", nwSetCursorBlink },
+    { "getCursorBlink", nwGetCursorBlink },
+    { "isColor", nwIsColour },
+    { "isColour", nwIsColour },
+    { "setTextColor", nwSetTextColour },
+    { "setTextColour", nwSetTextColour },
+    { "setBackgroundColor", nwSetBackgroundColour },
+    { "setBackgroundColour", nwSetBackgroundColour },
+    { "getTextColor", nwGetTextColour },
+    { "getTextColour", nwGetTextColour },
+    { "getBackgroundColor", nwGetBackgroundColour },
+    { "getBackgroundColour", nwGetBackgroundColour },
+    { "setPaletteColor", nwSetPaletteColour },
+    { "setPaletteColour", nwSetPaletteColour },
+    { "getPaletteColor", nwGetPaletteColour },
+    { "getPaletteColour", nwGetPaletteColour },
+    { "getSize", nwGetSize },
+    { "scroll", nwScroll },
+    { "getLine", nwGetLine },
+    { "setVisible", nwSetVisible },
+    { "isVisible", nwIsVisible },
+    { "redraw", nwRedrawMethod },
+    { "restoreCursor", nwRestoreCursor },
+    { "getPosition", nwGetPosition },
+    { "reposition", nwReposition },
+    { nullptr, nullptr },
+};
+
+// window.create(parent, x, y, width, height [, visible])
+static int nwCreate(lua_State* L) {
+    if (lua_type(L, 1) != LUA_TTABLE) {
+        luaL_error(L, "bad argument #1 (table expected, got %s)", displayTypeName(L, 1));
+    }
+    int x = (int) std::floor(checkJavaFiniteNumber(L, 2));
+    int y = (int) std::floor(checkJavaFiniteNumber(L, 3));
+    int width = checkJavaInt(L, 4);
+    int height = checkJavaInt(L, 5);
+    bool visible = true;
+    if (!lua_isnoneornil(L, 6)) visible = checkJavaBoolean(L, 6);
+    if (width < 0) width = 0;
+    if (height < 0) height = 0;
+
+    lua_getglobal(L, "term");
+    if (lua_rawequal(L, 1, -1)) {
+        luaL_error(L, "term is not a recommended window parent, try term.current() instead");
+    }
+    lua_pop(L, 1);
+
+    // The userdata holding the window state; its destructor releases the buffers.
+    auto* w = static_cast<NativeWindow*>(lua_newuserdatadtor(L, sizeof(NativeWindow), [](void* ud) {
+        static_cast<NativeWindow*>(ud)->~NativeWindow();
+    }));
+    new (w) NativeWindow();
+    int udIdx = lua_gettop(L);
+
+    w->x = x;
+    w->y = y;
+    w->width = width;
+    w->height = height;
+    w->visible = visible;
+    size_t size = (size_t) width * height;
+    w->text.assign(size, ' ');
+    w->fg.assign(size, '0');
+    w->bg.assign(size, 'f');
+
+    nwResolveParent(L, w, 1);
+
+    // Read the initial palette and colour support from the parent.
+    if (w->parentIsTerm) {
+        NativeTerm* t = getMachine(L)->term;
+        if (t != nullptr) {
+            memcpy(w->palette, t->palette, sizeof(w->palette));
+            w->colour = t->colour;
+        }
+    } else if (w->parentWin != nullptr) {
+        memcpy(w->palette, w->parentWin->palette, sizeof(w->palette));
+        w->colour = w->parentWin->colour;
+    } else {
+        for (int i = 0; i < 16; i++) {
+            lua_getfield(L, 1, "getPaletteColour");
+            lua_pushnumber(L, (double) (1 << i));
+            lua_call(L, 1, 3);
+            w->palette[i][0] = lua_tonumber(L, -3);
+            w->palette[i][1] = lua_tonumber(L, -2);
+            w->palette[i][2] = lua_tonumber(L, -1);
+            lua_pop(L, 3);
+        }
+        lua_getfield(L, 1, "isColour");
+        lua_call(L, 0, 1);
+        w->colour = lua_toboolean(L, -1) != 0;
+        lua_pop(L, 1);
+    }
+
+    // Build the window table: method closures with (userdata, table) upvalues,
+    // plus hidden fields tying the parent and state lifetimes to the table.
+    lua_createtable(L, 0, 36);
+    int tblIdx = lua_gettop(L);
+
+    lua_pushvalue(L, udIdx);
+    lua_setfield(L, tblIdx, NW_SELF_FIELD);
+    lua_pushvalue(L, 1);
+    lua_setfield(L, tblIdx, NW_PARENT_FIELD);
+
+    for (const luaL_Reg* reg = NW_METHODS; reg->name != nullptr; reg++) {
+        lua_pushvalue(L, udIdx);
+        lua_pushvalue(L, tblIdx);
+        lua_pushcclosure(L, reg->func, reg->name, 2);
+        lua_setfield(L, tblIdx, reg->name);
+    }
+
+    if (visible) nwRedraw(L, w, tblIdx);
+    return 1;
+}
+
+// ---------------------------------------------------------------------------
 // Native redstone (redstone/rs API)
 // ---------------------------------------------------------------------------
 static const char* SIDE_NAMES[6] = { "bottom", "top", "back", "front", "right", "left" };
@@ -1608,6 +2269,11 @@ JNIEXPORT jlong JNICALL Java_dan200_computercraft_core_lua_luau_LuauNative_creat
     lua_pushcfunction(L, ccluauLoadstring, "loadstring");
     lua_setglobal(L, "loadstring");
 
+    // The native window factory; rom/apis/window.lua delegates to this when
+    // present (see that file for the reference Lua implementation).
+    lua_pushcfunction(L, nwCreate, "window.create");
+    lua_setglobal(L, "_CC_NATIVE_WINDOW");
+
     // Emulate Lua 5.2's _ENV for chunks running in the default environment.
     // Chunks loaded with a custom environment get their own _ENV field (see
     // ccluauLoad).
@@ -1879,6 +2545,10 @@ JNIEXPORT void JNICALL Java_dan200_computercraft_core_lua_luau_LuauNative_initTe
         lua_pushcfunction(L, reg->func, reg->name);
         lua_setfield(L, -2, reg->name);
     }
+    // Mark the table so native windows can recognise it as a fast-path
+    // parent. term.lua only wraps function fields, so the flag is inert.
+    lua_pushboolean(L, 1);
+    lua_setfield(L, -2, "__ccluau_term");
     lua_setglobal(L, "term");
 }
 

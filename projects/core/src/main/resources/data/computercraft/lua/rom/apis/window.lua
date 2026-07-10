@@ -33,6 +33,16 @@ parent, and only one of which is visible at a time.
 @since 1.6
 ]]
 
+-- On runtimes with a native window implementation (the Luau runtime), the
+-- whole API is provided by the VM: identical semantics, far faster
+-- compositing. The Lua implementation below is the reference (and the
+-- fallback for other runtimes).
+if _CC_NATIVE_WINDOW then
+    local nativeCreate = _CC_NATIVE_WINDOW
+    function create(...) return nativeCreate(...) end
+    return
+end
+
 local expect = dofile("rom/modules/main/cc/expect.lua").expect
 
 local tHex = {
