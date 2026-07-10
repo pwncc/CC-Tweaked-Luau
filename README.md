@@ -76,19 +76,27 @@ the generated documentation [can be browsed online](https://tweaked.cc/javadoc/)
 [KiwiIRC]: https://kiwiirc.com/nextclient/#irc://irc.esper.net:+6697/#computercraft "#computercraft on EsperNet"
 
 ## Performance improvements
-Computers now run on the native [Luau](https://luau.org/) VM instead of the Cobalt runtime. Benchmark of identical workloads on both runtimes (lower is better):
+Computers now run on the native [Luau](https://luau.org/) VM (with its native code generator enabled) instead of the Cobalt runtime. Benchmark of identical workloads on both runtimes (lower is better):
 
 | Benchmark                             | Luau (new) | Cobalt (old) | Change      |
 |---------------------------------------|-----------:|-------------:|-------------|
-| Numeric loop (50M iterations)         |     555 ms |      5151 ms | 9.3x faster |
-| Coroutine switching (500k resumes)    |      44 ms |      1018 ms | 23x faster  |
-| Function calls (fib 30)               |      79 ms |       514 ms | 6.5x faster |
-| Table (array) reads/writes            |      48 ms |       335 ms | 7.0x faster |
-| Table (hash) writes                   |     120 ms |       655 ms | 5.5x faster |
-| String format/upper/gsub              |      54 ms |       206 ms | 3.8x faster |
-| Pattern matching (gmatch)             |    1432 ms |      2700 ms | 1.9x faster |
-| String concatenation                  |      64 ms |        88 ms | 1.4x faster |
-| Terminal redraw (100k term calls)     |      20 ms |        59 ms | 3.0x faster |
-| os time API (200k calls)              |      15 ms |       210 ms | 14x faster  |
+| Numeric loop (50M iterations)         |     324 ms |      3795 ms | 12x faster  |
+| Coroutine switching (500k resumes)    |      52 ms |      1036 ms | 20x faster  |
+| Function calls (fib 30)               |      60 ms |       463 ms | 7.7x faster |
+| Table (array) reads/writes            |      49 ms |       258 ms | 5.3x faster |
+| Table (hash) writes                   |      93 ms |       494 ms | 5.3x faster |
+| String format/upper/gsub              |      57 ms |       172 ms | 3.0x faster |
+| Pattern matching (gmatch)             |    1371 ms |      2351 ms | 1.7x faster |
+| String concatenation                  |      66 ms |        82 ms | 1.2x faster |
+| Terminal redraw (100k term calls)     |      14 ms |        46 ms | 3.3x faster |
+| Java API calls (200k calls)           |      14 ms |       162 ms | 12x faster  |
 
-The `term`, `redstone` and `os` time APIs are implemented natively inside the Luau runtime, so the calls used most heavily by real programs no longer cross into Java.
+On top of the faster VM, the hottest subsystems are implemented natively inside the runtime. Measured on the same Luau VM, reference Lua implementation vs native (lower is better):
+
+| Subsystem                                        | Lua impl | Native | Change      |
+|--------------------------------------------------|---------:|-------:|-------------|
+| Window compositing (nested windows, 20k writes)  |   116 ms |  12 ms | 9.7x faster |
+| Pixel text rendering (MineOS UI font rasteriser) |  1858 ms |  29 ms | 64x faster  |
+| File IO (20k-line file written + read 5x)        |   219 ms | 107 ms | 2.0x faster |
+
+The `term`, `redstone`, `window` and `os` time APIs run natively inside the VM, file handles are buffered, and computer screens now sync to viewers at up to 60Hz rather than once per server tick.
