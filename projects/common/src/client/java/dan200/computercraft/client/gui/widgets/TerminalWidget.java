@@ -57,10 +57,16 @@ public class TerminalWidget extends AbstractWidget {
     private boolean pointerInside = false;
     private boolean cursorHidden = false;
 
+    /**
+     * How much larger the on-screen terminal is than its base cell dimensions would suggest,
+     * giving high-density programs more room to breathe.
+     */
+    public static final float SCREEN_SCALE = 1.25f;
+
     public TerminalWidget(Terminal terminal, UserComputerInput computerInput, ClientComputerActions computerActions, int x, int y) {
         // The widget's footprint comes from the terminal's *base* size: a terminal resized by
         // term.setResolution renders more (smaller) characters in the same space.
-        super(x, y, terminal.getBaseWidth() * FONT_WIDTH + MARGIN * 2, terminal.getBaseHeight() * FONT_HEIGHT + MARGIN * 2, DESCRIPTION);
+        super(x, y, getWidth(terminal.getBaseWidth()), getHeight(terminal.getBaseHeight()), DESCRIPTION);
 
         this.terminal = terminal;
         this.computerInput = computerInput;
@@ -68,8 +74,8 @@ public class TerminalWidget extends AbstractWidget {
 
         innerX = x + MARGIN;
         innerY = y + MARGIN;
-        innerWidth = terminal.getBaseWidth() * FONT_WIDTH;
-        innerHeight = terminal.getBaseHeight() * FONT_HEIGHT;
+        innerWidth = Math.round(terminal.getBaseWidth() * FONT_WIDTH * SCREEN_SCALE);
+        innerHeight = Math.round(terminal.getBaseHeight() * FONT_HEIGHT * SCREEN_SCALE);
     }
 
     /**
@@ -286,61 +292,6 @@ public class TerminalWidget extends AbstractWidget {
         );
 
         pose.popPose();
-
-        renderPointer(graphics);
-    }
-
-    /**
-     * The pointer, drawn over the terminal while the program captures the mouse. Rendering it here -
-     * rather than as terminal cells - means it moves with per-pixel smoothness, floats above text
-     * without erasing it, and is unaffected by the terminal's cell grid.
-     */
-    private static final String[] ARROW_PATTERN = {
-        "X          ",
-        "XX         ",
-        "XoX        ",
-        "XooX       ",
-        "XoooX      ",
-        "XooooX     ",
-        "XoooooX    ",
-        "XooooooX   ",
-        "XoooooooX  ",
-        "XooooooooX ",
-        "XoooooXXXXX",
-        "XooXooX    ",
-        "XoX XooX   ",
-        "XX  XooX   ",
-        "X    XooX  ",
-        "     XooX  ",
-        "      XX   ",
-    };
-
-    private void renderPointer(GuiGraphics graphics) {
-        if (!terminal.getMouseCapture() || !pointerInside) return;
-
-        // The raw cursor position, in GUI coordinates but at full (double) precision.
-        var minecraft = Minecraft.getInstance();
-        var window = minecraft.getWindow();
-        var mouseX = minecraft.mouseHandler.xpos() * window.getGuiScaledWidth() / window.getScreenWidth();
-        var mouseY = minecraft.mouseHandler.ypos() * window.getGuiScaledHeight() / window.getScreenHeight();
-        if (!inTermRegion(mouseX, mouseY)) return;
-
-        // Scale the arrow to stand about a cell and a half tall at the base resolution, regardless
-        // of pixel density.
-        var unit = innerHeight * 1.5f / terminal.getBaseHeight() / ARROW_PATTERN.length;
-
-        var pose = graphics.pose();
-        pose.pushPose();
-        pose.translate(mouseX, mouseY, 0);
-        pose.scale(unit, unit, 1);
-        for (var y = 0; y < ARROW_PATTERN.length; y++) {
-            var row = ARROW_PATTERN[y];
-            for (var x = 0; x < row.length(); x++) {
-                var kind = row.charAt(x);
-                if (kind != ' ') graphics.fill(x, y, x + 1, y + 1, kind == 'o' ? 0xFFFFFFFF : 0xFF000000);
-            }
-        }
-        pose.popPose();
     }
 
     @Override
@@ -349,10 +300,10 @@ public class TerminalWidget extends AbstractWidget {
     }
 
     public static int getWidth(int termWidth) {
-        return termWidth * FONT_WIDTH + MARGIN * 2;
+        return Math.round(termWidth * FONT_WIDTH * SCREEN_SCALE) + MARGIN * 2;
     }
 
     public static int getHeight(int termHeight) {
-        return termHeight * FONT_HEIGHT + MARGIN * 2;
+        return Math.round(termHeight * FONT_HEIGHT * SCREEN_SCALE) + MARGIN * 2;
     }
 }

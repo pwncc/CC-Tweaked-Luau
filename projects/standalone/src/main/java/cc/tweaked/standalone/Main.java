@@ -24,7 +24,6 @@ import org.jetbrains.annotations.Contract;
 import org.jspecify.annotations.Nullable;
 import org.lwjgl.glfw.GLFW;
 import org.lwjgl.glfw.GLFWErrorCallback;
-import org.lwjgl.glfw.GLFWImage;
 import org.lwjgl.opengl.GL;
 import org.lwjgl.opengl.GLUtil;
 import org.lwjgl.system.Checks;
@@ -38,7 +37,6 @@ import java.nio.ByteBuffer;
 import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Objects;
 import java.util.OptionalInt;
@@ -413,22 +411,12 @@ public class Main {
 
         glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
 
-        // Pixel-art arrow cursors, swapped in while the program captures the mouse (and draws its
-        // own UI around it). Rendering the pointer at this layer keeps it perfectly smooth,
-        // whatever the terminal's cell grid looks like.
-        var arrowCursors = new HashMap<Integer, Long>();
-        gl.add(() -> {
-            for (var cursor : arrowCursors.values()) {
-                if (cursor != NULL) glfwDestroyCursor(cursor);
-            }
-        });
-
         // We run a single loop for both rendering and ticking computers. The computer ticks at a
         // fixed 20Hz, but events are pumped and the terminal redrawn far more often, so the
         // display follows input with only a few milliseconds of latency.
         var lastTickTime = GLFW.glfwGetTime();
         var lastCursorBlink = false;
-        var cursorScale = 0; // 0 = the normal system cursor
+        var cursorCaptured = false;
         while (!glfwWindowShouldClose(window)) {
             var now = GLFW.glfwGetTime();
             if (now - lastTickTime >= 0.05) {
@@ -470,13 +458,12 @@ public class Main {
                 }
             }
 
-            // Swap in the arrow cursor while the program captures the mouse (term.setMouseCapture),
-            // scaled with the window so it keeps a sensible physical size.
-            var wantScale = terminal.getMouseCapture() ? Math.max(2, Math.round(windowSize[1] / 400f)) : 0;
-            if (wantScale != cursorScale) {
-                cursorScale = wantScale;
-                var cursor = wantScale == 0 ? NULL : arrowCursors.computeIfAbsent(wantScale, Main::createArrowCursor);
-                glfwSetCursor(window, cursor);
+            // Hide the hardware cursor over the simulated screen while the program draws its own
+            // pointer inside the terminal (term.setMouseCapture).
+            var wantCapture = terminal.getMouseCapture();
+            if (wantCapture != cursorCaptured) {
+                cursorCaptured = wantCapture;
+                glfwSetInputMode(window, GLFW_CURSOR, wantCapture ? GLFW_CURSOR_HIDDEN : GLFW_CURSOR_NORMAL);
             }
 
             // Update the cursor blink if needed.
@@ -501,47 +488,6 @@ public class Main {
             // Pump events (waking early on input) and loop again; the 5ms timeout bounds both input
             // latency and idle CPU usage.
             GLFW.glfwWaitEventsTimeout(0.005);
-        }
-    }
-
-    /**
-     * The classic arrow pointer. {@code X} is the black outline, {@code o} the white fill.
-     */
-    private static final String[] ARROW_PATTERN = {
-        "X          ",
-        "XX         ",
-        "XoX        ",
-        "XooX       ",
-        "XoooX      ",
-        "XooooX     ",
-        "XoooooX    ",
-        "XooooooX   ",
-        "XoooooooX  ",
-        "XooooooooX ",
-        "XoooooXXXXX",
-        "XooXooX    ",
-        "XoX XooX   ",
-        "XX  XooX   ",
-        "X    XooX  ",
-        "     XooX  ",
-        "      XX   ",
-    };
-
-    private static long createArrowCursor(int scale) {
-        var width = ARROW_PATTERN[0].length() * scale;
-        var height = ARROW_PATTERN.length * scale;
-        try (var stack = MemoryStack.stackPush()) {
-            var pixels = stack.malloc(width * height * 4);
-            for (var y = 0; y < height; y++) {
-                for (var x = 0; x < width; x++) {
-                    var kind = ARROW_PATTERN[y / scale].charAt(x / scale);
-                    var fill = kind == 'o' ? (byte) 0xFF : (byte) 0;
-                    pixels.put(fill).put(fill).put(fill).put(kind != ' ' ? (byte) 0xFF : (byte) 0);
-                }
-            }
-            pixels.flip();
-            var image = GLFWImage.malloc(stack).width(width).height(height).pixels(pixels);
-            return glfwCreateCursor(image, 0, 0);
         }
     }
 

@@ -2,25 +2,31 @@
 --
 -- SPDX-License-Identifier: MPL-2.0
 
---[[- MineOS 2: a graphical desktop for advanced computers.
+--[[- MineOS 3: a pixel-graphics desktop for advanced computers.
 
-A windowed desktop one step up from CraftOS: draggable, resizable windows,
-a start menu, right-click context menus, double-clickable icons, a file
-explorer, terminals, a paint program and a task manager.
+The terminal runs at high density (term.setResolution), where each cell is
+small enough to act as a pixel. The whole interface - windows, menus, icons
+and text - is drawn as pixels, with text rendered from the CraftOS font
+(mineos.font / mineos.gfx). Classic programs such as the shell and editor run
+in windows whose terminal is software-rendered at a readable size
+(mineos.vterm), so everything that runs on CraftOS still works here.
 
-Third-party apps live in /apps: any Lua file with a metadata header appears
-on the desktop and receives a `mineos` API for windows, menus and dialogs.
-See the About app for the format.
+Third-party apps live in /apps: any Lua file with a metadata header appears on
+the desktop and receives a `mineos` API for windows, menus and dialogs. See
+the About app for the format.
 
 Run with `mineos`, or enable `mineos.autostart` to boot straight into it.
 ]]
 
-local VERSION = "2.0"
+local VERSION = "3.0"
 
 if not term.isColour() then
     printError("MineOS requires an advanced (gold) computer.")
     return
 end
+
+local gfx = require "mineos.gfx"
+local vterm = require "mineos.vterm"
 
 -- ------------------------------------------------------------------
 -- Settings
@@ -34,22 +40,21 @@ settings.define("mineos.mirror", {
     default = false, type = "boolean",
 })
 settings.define("mineos.density", {
-    description = "MineOS pixel density (terminal resolution multiplier, 1-10).",
-    default = 3, type = "number",
+    description = "MineOS pixel density (terminal resolution multiplier).",
+    default = 15, type = "number",
 })
 settings.define("mineos.wallpaper", {
     description = "MineOS wallpaper: a colour name, or the path of an .nfp image.",
     default = "cyan", type = "string",
 })
 settings.define("mineos.pointer", {
-    description = "Draw the MineOS mouse pointer (requires mouse_move support).",
+    description = "Show the MineOS mouse cursor over the screen.",
     default = true, type = "boolean",
 })
 
 -- ------------------------------------------------------------------
--- Resolution: MineOS runs the physical terminal at a higher density and
--- restores it on exit. We resize the *native* terminal - multishell then
--- resizes our own window in response to term_resize.
+-- Resolution. MineOS needs a high density to draw pixels; 10x and 15x are
+-- offered (15x is 765x285 cells on a standard computer).
 -- ------------------------------------------------------------------
 local nativeTerm = term.native and term.native()
 local ownsResolution = false
@@ -67,15 +72,14 @@ local function applyDensity(scale)
 end
 
 local density = settings.get("mineos.density")
-if type(density) ~= "number" then density = 3 end
-density = math.max(1, math.min(10, math.floor(density)))
-if density > 1 and applyDensity(density) then
-    ownsResolution = true
-else
-    density = 1
+if type(density) ~= "number" or (density ~= 10 and density ~= 15) then density = 15 end
+if not applyDensity(density) then
+    printError("MineOS requires a runtime with term.setResolution support.")
+    return
 end
+ownsResolution = true
 
--- Ask the host to swap in the MineOS arrow cursor while it is over us.
+-- Ask the host to show the MineOS cursor while it is over us.
 local capturedMouse = false
 if settings.get("mineos.pointer") and nativeTerm and nativeTerm.setMouseCapture then
     capturedMouse = pcall(nativeTerm.setMouseCapture, true)
@@ -115,9 +119,10 @@ end
 local root = makeMirror(term.current())
 local W, H = root.getSize()
 local screen = window.create(root, 1, 1, W, H, true)
+local g = gfx.new(screen)
 
 -- ------------------------------------------------------------------
--- Theme
+-- Theme + metrics (all in cells; a 3x2 block of cells is square)
 -- ------------------------------------------------------------------
 local theme = {
     desktopText = colours.white,
@@ -132,12 +137,27 @@ local theme = {
     maximise = colours.lime,
     body = colours.white,
     bodyText = colours.black,
+    border = colours.grey,
     menuBg = colours.white,
     menuText = colours.black,
     menuHover = colours.blue,
     menuHoverText = colours.white,
     selection = colours.lightBlue,
 }
+
+-- Text sizes: cells per font pixel. SMALL is the workhorse; glyphs are
+-- 12x9 cells (about 80% the size of the classic terminal font at 1x).
+local SMALL_W, SMALL_H = 2, 1
+local LARGE_W, LARGE_H = 4, 3
+local GLYPH_W, GLYPH_H = gfx.GLYPH_W, gfx.GLYPH_H
+
+local TITLE_H = GLYPH_H * SMALL_H + 4     -- window title bar height
+local BTN_W = 18                          -- window title button width
+local BORDER = 2                          -- window side/bottom border
+local TASKBAR_H = GLYPH_H * SMALL_H + 6
+local MENU_ROW = GLYPH_H * SMALL_H + 4
+local GRIP_W, GRIP_H = 9, 6
+local MIN_W, MIN_H = 140, 70
 
 local WALLPAPER_COLOURS = { "cyan", "blue", "black", "grey", "green", "purple", "brown", "red" }
 
@@ -154,12 +174,13 @@ end
 local windows = {} -- Bottom to top. See openWindow for the fields.
 local running = true
 local startClock = os.clock()
-local dragging = nil -- { wnd, dx, dy } while moving a window
-local resizing = nil -- { wnd } while resizing a window
-local menu = nil     -- open overlay menu (start / context menus)
+local dragging = nil
+local resizing = nil
+local menu = nil
 local pointer = { x = -1, y = -1, inside = false, seen = false, under = nil }
 local lastClick = { time = 0, target = nil }
 local clockTimer = nil
+local selectedIcon = nil
 
 -- Forward declarations.
 local resumeWindow, closeWindow, focusWindow, redrawAll, drawTaskbar, launchApp, openStartMenu, mineosAPI
@@ -185,73 +206,63 @@ local function isDoubleClick(target)
 end
 
 -- ------------------------------------------------------------------
--- Pointer: a small arrow built from teletext subpixels over a 2x2 cell
--- block, tracking mouse_move. It lives in the same pixel grid as the
--- rest of the desktop, so it scales with the density. The cells under
--- it are saved and restored around every event, so apps never see it.
+-- Pointer: a pixel-art arrow drawn in the screen's own pixel grid,
+-- exactly as a program running on this machine would have to. At high
+-- density the grid is fine enough that pixel-snapped movement is smooth.
+-- The pixels underneath are saved and restored around every event.
 -- ------------------------------------------------------------------
 local POINTER_SHAPE = {
-    "X...",
-    "XX..",
-    "XXX.",
-    "XXXX",
-    "XX..",
-    "X...",
+    "X          ",
+    "XX         ",
+    "XoX        ",
+    "XooX       ",
+    "XoooX      ",
+    "XooooX     ",
+    "XoooooX    ",
+    "XooooooX   ",
+    "XoooooooX  ",
+    "XooooooooX ",
+    "XoooooXXXXX",
+    "XooXooX    ",
+    "XoX XooX   ",
+    "XX  XooX   ",
+    "X    XooX  ",
+    "     XooX  ",
+    "      XX   ",
 }
 
--- Convert the shape into per-cell drawing characters, upscaled to match the
--- pixel density (more pixels means a sharper arrow, not a smaller one) and
--- offset by the pointer's subpixel position within its cell, so the arrow
--- moves at subpixel rather than cell granularity. Each cell encodes 2x3
--- subpixels; the bottom-right subpixel cannot be set directly, so cells which
--- need it use the complemented character with swapped colours.
-local pointerCellCache = {}
+-- Rasterise the arrow for the current density. Cells are 2:3, so an equal
+-- cell count per axis comes out at roughly the shape's intended proportions;
+-- the size is chosen so the arrow is about 10 font-pixels tall at any density.
+local pointerSpriteCache = {}
 
-local function pointerCells(scale, subX, subY)
-    local key = scale * 6 + subY * 2 + subX
-    local cached = pointerCellCache[key]
+local function pointerSprite()
+    local size = math.max(#POINTER_SHAPE, math.floor(10 * density / 9 + 0.5))
+    local cached = pointerSpriteCache[size]
     if cached then return cached end
 
-    local width, height = 4 * scale + subX, 6 * scale + subY
-    local cells = {}
-    for cellY = 0, math.ceil(height / 3) - 1 do
-        for cellX = 0, math.ceil(width / 2) - 1 do
-            local mask = 0
-            for py = 1, 3 do
-                local pixelY = cellY * 3 + py - 1 - subY
-                local row = pixelY >= 0 and POINTER_SHAPE[math.floor(pixelY / scale) + 1]
-                for px = 1, 2 do
-                    local pixelX = cellX * 2 + px - 1 - subX
-                    if row and pixelX >= 0 then
-                        local shapeX = math.floor(pixelX / scale) + 1
-                        if row:sub(shapeX, shapeX) == "X" then
-                            mask = mask + 2 ^ ((py - 1) * 2 + (px - 1))
-                        end
-                    end
-                end
-            end
-            if mask > 0 then
-                local inverted = mask >= 32
-                if inverted then mask = 63 - mask end
-                cells[#cells + 1] = {
-                    dx = cellX, dy = cellY,
-                    char = string.char(128 + mask),
-                    inverted = inverted,
-                }
-            end
+    local shapeH, shapeW = #POINTER_SHAPE, #POINTER_SHAPE[1]
+    local rows = {}
+    for y = 0, size - 1 do
+        local row = {}
+        for x = 0, size - 1 do
+            local shapeRow = POINTER_SHAPE[math.floor(y * shapeH / size) + 1]
+            row[x + 1] = shapeRow:sub(math.floor(x * shapeW / size) + 1, math.floor(x * shapeW / size) + 1)
         end
+        rows[y + 1] = table.concat(row)
     end
-    pointerCellCache[key] = cells
-    return cells
+    local sprite = { size = size, rows = rows }
+    pointerSpriteCache[size] = sprite
+    return sprite
 end
 
 local function pointerRestore()
     local saved = pointer.under
     if not saved then return end
     pointer.under = nil
-    for _, cell in ipairs(saved) do
-        screen.setCursorPos(cell.x, cell.y)
-        screen.blit(cell.char, cell.fg, cell.bg)
+    for _, row in ipairs(saved) do
+        screen.setCursorPos(row.x, row.y)
+        screen.blit(row.text, row.fg, row.bg)
     end
 end
 
@@ -259,28 +270,48 @@ local function pointerStamp()
     if not capturedMouse or not pointer.seen or not pointer.inside then return end
     if not settings.get("mineos.pointer") then return end
 
+    local sprite = pointerSprite()
     local saved = {}
-    local lines = {}
-    local cells = pointerCells(math.max(1, math.ceil(density / 4)), pointer.subX or 0, pointer.subY or 0)
-    for _, cell in ipairs(cells) do
-        local x, y = pointer.x + cell.dx, pointer.y + cell.dy
-        if x >= 1 and y >= 1 and x <= W and y <= H then
-            local line = lines[y]
-            if not line then
-                local text, fg, bg = screen.getLine(y)
-                line = { text = text, fg = fg, bg = bg }
-                lines[y] = line
+    for sy = 1, sprite.size do
+        local y = pointer.y + sy - 1
+        if y >= 1 and y <= H then
+            local shapeRow = sprite.rows[sy]
+            -- Trim to the used extent of this row, clipped to the screen.
+            local firstX, lastX = nil, 0
+            for sx = 1, sprite.size do
+                if shapeRow:sub(sx, sx) ~= " " then
+                    local x = pointer.x + sx - 1
+                    if x >= 1 and x <= W then
+                        firstX = firstX or sx
+                        lastX = sx
+                    end
+                end
             end
-            local underBg = line.bg:sub(x, x)
-            saved[#saved + 1] = {
-                x = x, y = y,
-                char = line.text:sub(x, x), fg = line.fg:sub(x, x), bg = underBg,
-            }
-            screen.setCursorPos(x, y)
-            if cell.inverted then
-                screen.blit(cell.char, underBg, "0")
-            else
-                screen.blit(cell.char, "0", underBg)
+            if firstX then
+                local x = pointer.x + firstX - 1
+                local width = lastX - firstX + 1
+                local text, fgLine, bgLine = screen.getLine(y)
+                local segText = text:sub(x, x + width - 1)
+                local segFg = fgLine:sub(x, x + width - 1)
+                local segBg = bgLine:sub(x, x + width - 1)
+                saved[#saved + 1] = { x = x, y = y, text = segText, fg = segFg, bg = segBg }
+
+                -- Compose the arrow over the saved segment.
+                local outText, outFg, outBg = {}, {}, {}
+                for i = 1, width do
+                    local kind = shapeRow:sub(firstX + i - 1, firstX + i - 1)
+                    if kind == "X" then
+                        outText[i], outFg[i], outBg[i] = " ", "f", "f"
+                    elseif kind == "o" then
+                        outText[i], outFg[i], outBg[i] = " ", "0", "0"
+                    else
+                        outText[i] = segText:sub(i, i)
+                        outFg[i] = segFg:sub(i, i)
+                        outBg[i] = segBg:sub(i, i)
+                    end
+                end
+                screen.setCursorPos(x, y)
+                screen.blit(table.concat(outText), table.concat(outFg), table.concat(outBg))
             end
         end
     end
@@ -290,35 +321,51 @@ end
 -- ------------------------------------------------------------------
 -- Desktop + taskbar
 -- ------------------------------------------------------------------
-local selectedIcon = nil
+local SLOT_W, SLOT_H = 116, 50
+local TILE_W, TILE_H = 34, 26
 
 local function iconPos(i)
-    -- Icons flow down the left edge, then wrap into further columns.
-    local perColumn = math.max(1, math.floor((H - 3) / 3))
+    local perColumn = math.max(1, math.floor((H - TASKBAR_H - 8) / SLOT_H))
     local column = math.floor((i - 1) / perColumn)
     local row = (i - 1) % perColumn
-    return 3 + column * 14, 2 + row * 3
+    return 8 + column * (SLOT_W + 8), 6 + row * SLOT_H
 end
 
--- The wallpaper image is cached: drawDesktop runs on every relayout, and
--- re-reading the file each time would make window drags crawl.
 local wallpaperImage, wallpaperImagePath = nil, nil
 
 local function drawDesktop()
     screen.setBackgroundColour(wallpaperColour())
     screen.clear()
 
-    -- An .nfp wallpaper, if configured.
+    -- An .nfp wallpaper, scaled up (in square pixel blocks) to fill the screen.
     local wallpaper = settings.get("mineos.wallpaper")
     if type(wallpaper) == "string" and wallpaper:sub(-4) == ".nfp" and fs.exists(wallpaper) then
         if wallpaper ~= wallpaperImagePath then
             wallpaperImagePath = wallpaper
             wallpaperImage = paintutils.loadImage(wallpaper)
         end
-        if wallpaperImage then
-            local previous = term.redirect(screen)
-            paintutils.drawImage(wallpaperImage, 1, 1)
-            term.redirect(previous)
+        local image = wallpaperImage
+        if image and #image > 0 then
+            local imageW = 0
+            for _, line in ipairs(image) do
+                for x in pairs(line) do
+                    if x > imageW then imageW = x end
+                end
+            end
+            if imageW > 0 then
+                local scale = math.max(1, math.floor(math.min(W / (3 * imageW), H / (2 * #image))))
+                local pxW, pxH = 3 * scale, 2 * scale
+                local originX = math.floor((W - imageW * pxW) / 2) + 1
+                local originY = math.floor((H - #image * pxH) / 2) + 1
+                for y, line in ipairs(image) do
+                    for x = 1, imageW do
+                        local colour = line[x]
+                        if colour and colour > 0 then
+                            g:rect(originX + (x - 1) * pxW, originY + (y - 1) * pxH, pxW, pxH, colour)
+                        end
+                    end
+                end
+            end
         end
     else
         wallpaperImagePath, wallpaperImage = nil, nil
@@ -326,54 +373,61 @@ local function drawDesktop()
 
     for i, app in ipairs(APPS) do
         local x, y = iconPos(i)
-        if y + 1 < H then
-            screen.setCursorPos(x, y)
-            screen.setBackgroundColour(app.colour)
-            screen.setTextColour(colours.white)
-            screen.write(" " .. app.icon .. " ")
-            screen.setCursorPos(x - 1, y + 1)
-            screen.setBackgroundColour(selectedIcon == i and theme.selection or wallpaperColour())
-            screen.setTextColour(theme.desktopText)
-            screen.write(app.name:sub(1, 12))
+        if y + SLOT_H < H - TASKBAR_H then
+            -- A coloured tile with a large glyph, and the app name below.
+            local tileX = x + math.floor((SLOT_W - TILE_W) / 2)
+            if selectedIcon == i then
+                g:rect(tileX - 3, y - 2, TILE_W + 6, TILE_H + 4, theme.selection)
+            end
+            g:rect(tileX, y, TILE_W, TILE_H, app.colour)
+            local glyphX = tileX + math.floor((TILE_W - GLYPH_W * LARGE_W) / 2)
+            local glyphY = y + math.floor((TILE_H - GLYPH_H * LARGE_H * 2 / 3) / 2) - 2
+            g:text(glyphX, glyphY, app.icon, colours.white, app.colour, LARGE_W, 2)
+
+            local label = app.name:sub(1, 9)
+            local labelW = g:textWidth(label, SMALL_W)
+            local labelX = x + math.floor((SLOT_W - labelW) / 2)
+            local labelBg = selectedIcon == i and theme.selection or wallpaperColour()
+            g:text(labelX, y + TILE_H + 3, label, theme.desktopText, labelBg, SMALL_W, SMALL_H)
         end
     end
 end
 
 function drawTaskbar()
-    screen.setCursorPos(1, H)
-    screen.setBackgroundColour(theme.taskbar)
-    screen.setTextColour(theme.taskbarText)
-    screen.clearLine()
+    local y = H - TASKBAR_H + 1
+    g:rect(1, y, W, TASKBAR_H, theme.taskbar)
 
-    screen.setCursorPos(1, H)
-    screen.setBackgroundColour(theme.accent)
-    screen.write(" MineOS ")
+    -- Start button.
+    local startW = g:textWidth("MineOS", SMALL_W) + 12
+    g:rect(1, y, startW, TASKBAR_H, theme.accent)
+    g:text(7, y + 3, "MineOS", theme.taskbarText, theme.accent, SMALL_W, SMALL_H)
 
-    local x = 10
+    -- Window buttons.
+    local x = startW + 6
     for _, wnd in ipairs(windows) do
-        local label = " " .. wnd.title:sub(1, 10) .. " "
-        screen.setCursorPos(x, H)
-        if wnd.minimised then
-            screen.setBackgroundColour(theme.taskbar)
-            screen.setTextColour(colours.lightGrey)
-        else
-            screen.setBackgroundColour(wnd == focused() and theme.accent or theme.taskbar)
-            screen.setTextColour(theme.taskbarText)
+        local label = wnd.title:sub(1, 9)
+        local buttonW = g:textWidth(label, SMALL_W) + 10
+        if x + buttonW > W - 220 then break end
+        local bg = theme.taskbar
+        local fg = colours.lightGrey
+        if not wnd.minimised then
+            bg = wnd == focused() and theme.accent or colours.lightGrey
+            fg = wnd == focused() and theme.taskbarText or colours.black
         end
-        screen.write(label)
-        wnd.taskbarX, wnd.taskbarW = x, #label
-        x = x + #label + 1
+        g:rect(x, y + 2, buttonW, TASKBAR_H - 4, bg)
+        g:text(x + 5, y + 3, label, fg, bg, SMALL_W, SMALL_H)
+        wnd.taskbarX, wnd.taskbarW = x, buttonW
+        x = x + buttonW + 4
     end
 
+    -- Clock.
     local uptime = math.floor(os.clock() - startClock)
-    local clock = ("%s Day %d  wasted %d:%02d "):format(
+    local clock = ("%s Day %d  %d:%02d"):format(
         textutils.formatTime(os.time(), false), os.day(),
         math.floor(uptime / 60), uptime % 60
     )
-    screen.setBackgroundColour(theme.taskbar)
-    screen.setTextColour(colours.lightGrey)
-    screen.setCursorPos(W - #clock + 1, H)
-    screen.write(clock)
+    local clockW = g:textWidth(clock, SMALL_W)
+    g:text(W - clockW - 6, y + 3, clock, colours.lightGrey, theme.taskbar, SMALL_W, SMALL_H)
 end
 
 -- ------------------------------------------------------------------
@@ -381,48 +435,48 @@ end
 -- ------------------------------------------------------------------
 local function drawFrame(wnd)
     local active = wnd == focused()
-    local win = wnd.win
-    win.setCursorPos(1, 1)
-    win.setBackgroundColour(active and theme.titleBar or theme.titleBarInactive)
-    win.setTextColour(theme.titleText)
-    win.clearLine()
-    win.setCursorPos(2, 1)
-    win.write(wnd.title:sub(1, wnd.w - 6))
+    local fg = gfx.new(wnd.win)
+    local barColour = active and theme.titleBar or theme.titleBarInactive
+
+    -- Title bar, borders.
+    fg:rect(1, 1, wnd.w, TITLE_H, barColour)
+    fg:rect(1, TITLE_H + 1, BORDER, wnd.h - TITLE_H, theme.border)
+    fg:rect(wnd.w - BORDER + 1, TITLE_H + 1, BORDER, wnd.h - TITLE_H, theme.border)
+    fg:rect(1, wnd.h - BORDER + 1, wnd.w, BORDER, theme.border)
+
+    local maxTitle = math.floor((wnd.w - BTN_W * 3 - 12) / (GLYPH_W * SMALL_W))
+    fg:text(6, 3, wnd.title:sub(1, maxTitle), theme.titleText, barColour, SMALL_W, SMALL_H)
 
     -- Minimise, maximise, close.
-    win.setCursorPos(wnd.w - 2, 1)
-    win.setBackgroundColour(theme.minimise)
-    win.setTextColour(colours.black)
-    win.write("-")
-    win.setBackgroundColour(theme.maximise)
-    win.write(wnd.maximised and "\31" or "+")
-    win.setBackgroundColour(theme.close)
-    win.setTextColour(colours.white)
-    win.write("x")
+    local buttonY, buttonH = 1, TITLE_H
+    local closeX = wnd.w - BTN_W + 1
+    local maxX = closeX - BTN_W
+    local minX = maxX - BTN_W
+    fg:rect(minX, buttonY, BTN_W, buttonH, theme.minimise)
+    fg:text(minX + math.floor((BTN_W - GLYPH_W * SMALL_W) / 2), buttonY + 3, "-", colours.black, theme.minimise, SMALL_W, SMALL_H)
+    fg:rect(maxX, buttonY, BTN_W, buttonH, theme.maximise)
+    fg:text(maxX + math.floor((BTN_W - GLYPH_W * SMALL_W) / 2), buttonY + 3, wnd.maximised and "\18" or "+", colours.black, theme.maximise, SMALL_W, SMALL_H)
+    fg:rect(closeX, buttonY, BTN_W, buttonH, theme.close)
+    fg:text(closeX + math.floor((BTN_W - GLYPH_W * SMALL_W) / 2), buttonY + 3, "x", colours.white, theme.close, SMALL_W, SMALL_H)
 
     -- Resize grip.
     if not wnd.maximised then
-        win.setCursorPos(wnd.w, wnd.h)
-        win.setBackgroundColour(theme.titleBarInactive)
-        win.setTextColour(colours.grey)
-        win.write("\127")
+        fg:rect(wnd.w - GRIP_W + 1, wnd.h - GRIP_H + 1, GRIP_W, GRIP_H, active and theme.accent or colours.lightGrey)
     end
 end
 
 local function drawMenuOverlay()
     if not menu then return end
+    g:rect(menu.x, menu.y, menu.w, menu.h, theme.menuBg)
     for i, item in ipairs(menu.items) do
-        local y = menu.y + i - 1
-        screen.setCursorPos(menu.x, y)
+        local y = menu.y + (i - 1) * MENU_ROW
         if item.sep then
-            screen.setBackgroundColour(theme.menuBg)
-            screen.setTextColour(colours.lightGrey)
-            screen.write(("\140"):rep(menu.w))
+            g:rect(menu.x + 4, y + math.floor(MENU_ROW / 2), menu.w - 8, 1, colours.lightGrey)
         else
             local hover = menu.hover == i
-            screen.setBackgroundColour(hover and theme.menuHover or theme.menuBg)
-            screen.setTextColour(hover and theme.menuHoverText or theme.menuText)
-            screen.write(" " .. item.label .. (" "):rep(menu.w - #item.label - 1))
+            if hover then g:rect(menu.x, y, menu.w, MENU_ROW, theme.menuHover) end
+            g:text(menu.x + 6, y + 2, item.label, hover and theme.menuHoverText or theme.menuText,
+                hover and theme.menuHover or theme.menuBg, SMALL_W, SMALL_H)
         end
     end
 end
@@ -435,6 +489,8 @@ function redrawAll()
     for _, wnd in ipairs(windows) do
         if not wnd.minimised then
             drawFrame(wnd)
+            -- The content window's buffer persists (including software-rendered
+            -- legacy terminals), so pushing it is enough - no re-rasterising.
             wnd.win.redraw()
         end
     end
@@ -447,13 +503,13 @@ end
 -- Overlay menus (start menu, context menus)
 -- ------------------------------------------------------------------
 local function openMenu(x, y, items)
-    local w = 4
+    local w = 40
     for _, item in ipairs(items) do
-        if item.label and #item.label + 2 > w then w = #item.label + 2 end
+        if item.label then w = math.max(w, g:textWidth(item.label, SMALL_W) + 12) end
     end
-    local h = #items
+    local h = #items * MENU_ROW
     x = math.max(1, math.min(x, W - w + 1))
-    y = math.max(1, math.min(y, H - h))
+    y = math.max(1, math.min(y, H - TASKBAR_H - h))
     menu = { x = x, y = y, w = w, h = h, items = items, hover = nil }
     drawMenuOverlay()
 end
@@ -467,8 +523,9 @@ end
 local function menuItemAt(x, y)
     if not menu then return end
     if x < menu.x or x >= menu.x + menu.w or y < menu.y or y >= menu.y + menu.h then return end
-    local item = menu.items[y - menu.y + 1]
-    if item and not item.sep then return y - menu.y + 1, item end
+    local index = math.floor((y - menu.y) / MENU_ROW) + 1
+    local item = menu.items[index]
+    if item and not item.sep then return index, item end
 end
 
 -- Returns true when the event was consumed by the menu.
@@ -513,32 +570,65 @@ end
 -- ------------------------------------------------------------------
 -- Window management
 -- ------------------------------------------------------------------
-local MIN_W, MIN_H = 14, 5
+local function contentArea(wnd)
+    return wnd.w - BORDER * 2, wnd.h - TITLE_H - BORDER
+end
 
 local function contentReposition(wnd)
-    wnd.content.reposition(1, 2, wnd.w, wnd.h - 1)
+    local cw, ch = contentArea(wnd)
+    wnd.content.reposition(BORDER + 1, TITLE_H + 1, cw, ch)
+    if wnd.vterm then
+        local cols, rows = vterm.fit(cw, ch, 2, 1)
+        wnd.vterm.resize(cols, rows)
+        wnd.content.setBackgroundColour(colours.black)
+        wnd.content.clear()
+        wnd.vterm.render()
+    end
 end
 
 --- Open a new window running `fn` in its own coroutine.
-local function openWindow(title, x, y, w, h, fn)
-    local wnd = { title = title, x = x, y = y, w = w, h = h, minimised = false, maximised = false }
+--
+-- `kind` is "pixel" (the app draws with mineos.gfx on a raw high-density
+-- terminal) or "legacy" (the app gets a classic software-rendered terminal).
+local function openWindow(title, x, y, w, h, kind, fn)
+    local wnd = { title = title, x = x, y = y, w = w, h = h, kind = kind, minimised = false, maximised = false }
     wnd.win = window.create(screen, x, y, w, h, true)
-    wnd.content = window.create(wnd.win, 1, 2, w, h - 1, true)
-    wnd.content.setBackgroundColour(theme.body)
-    wnd.content.setTextColour(theme.bodyText)
-    wnd.content.clear()
-    wnd.content.setCursorPos(1, 1)
-    wnd.term = wnd.content
+    local cw, ch = contentArea(wnd)
+    wnd.content = window.create(wnd.win, BORDER + 1, TITLE_H + 1, cw, ch, true)
+
+    if kind == "legacy" then
+        local cols, rows = vterm.fit(cw, ch, 2, 1)
+        wnd.vterm = vterm.new(wnd.content, cols, rows, 2, 1)
+        wnd.term = wnd.vterm
+        wnd.content.setBackgroundColour(colours.black)
+        wnd.content.clear()
+    else
+        wnd.content.setBackgroundColour(theme.body)
+        wnd.content.setTextColour(theme.bodyText)
+        wnd.content.clear()
+        wnd.content.setCursorPos(1, 1)
+        wnd.term = wnd.content
+    end
+
     wnd.co = coroutine.create(function()
         local ok, err = pcall(fn, wnd)
         if not ok and err ~= nil and tostring(err) ~= "Terminated" then
             pcall(function()
-                term.setBackgroundColour(theme.body)
-                term.setTextColour(colours.red)
-                print("\nThis app crashed:")
-                print(tostring(err))
-                term.setTextColour(colours.lightGrey)
-                print("(click x to close)")
+                if kind == "legacy" then
+                    term.setBackgroundColour(colours.black)
+                    term.setTextColour(colours.red)
+                    print("\nThis app crashed:")
+                    print(tostring(err))
+                    term.setTextColour(colours.lightGrey)
+                    print("(click x to close)")
+                else
+                    local cg = gfx.new(term.current())
+                    local cw2, ch2 = term.current().getSize()
+                    cg:rect(1, 1, cw2, ch2, theme.body)
+                    cg:text(6, 4, "This app crashed:", colours.red, theme.body, SMALL_W, SMALL_H)
+                    cg:text(6, 4 + MENU_ROW, tostring(err):sub(1, 60), colours.black, theme.body, SMALL_W, SMALL_H)
+                    cg:text(6, 4 + MENU_ROW * 2, "(click x to close)", colours.lightGrey, theme.body, SMALL_W, SMALL_H)
+                end
                 while true do os.pullEvent("never") end
             end)
         end
@@ -580,18 +670,17 @@ local function minimiseWindow(wnd)
 end
 
 local function moveWindow(wnd, x, y)
-    wnd.x = math.max(1 - wnd.w + 4, math.min(x, W - 3))
-    wnd.y = math.max(1, math.min(y, H - 2))
+    wnd.x = math.max(1 - wnd.w + 30, math.min(x, W - 30))
+    wnd.y = math.max(1, math.min(y, H - TASKBAR_H - TITLE_H))
     wnd.win.reposition(wnd.x, wnd.y)
     redrawAll()
 end
 
 -- Resize a window. During a live (grip-drag) resize the app is not notified:
--- a full app repaint per mouse event would lag behind the cursor, so the
--- term_resize is sent once, when the button is released.
+-- the term_resize is sent once, when the button is released.
 local function resizeWindow(wnd, w, h, live)
     w = math.max(MIN_W, math.min(w, W))
-    h = math.max(MIN_H, math.min(h, H - 1))
+    h = math.max(MIN_H, math.min(h, H - TASKBAR_H))
     if w == wnd.w and h == wnd.h then return end
     wnd.w, wnd.h = w, h
     wnd.win.reposition(wnd.x, wnd.y, w, h)
@@ -608,7 +697,7 @@ local function toggleMaximise(wnd)
     else
         wnd.maximised = true
         wnd.restore = { x = wnd.x, y = wnd.y, w = wnd.w, h = wnd.h }
-        wnd.x, wnd.y, wnd.w, wnd.h = 1, 1, W, H - 1
+        wnd.x, wnd.y, wnd.w, wnd.h = 1, 1, W, H - TASKBAR_H
     end
     wnd.win.reposition(wnd.x, wnd.y, wnd.w, wnd.h)
     contentReposition(wnd)
@@ -617,8 +706,6 @@ local function toggleMaximise(wnd)
 end
 
 --- Resume a window's coroutine with an event, respecting its event filter.
--- Follows multishell's model: redirect to the window's last-known terminal
--- before resuming, and remember whatever terminal the app left current.
 function resumeWindow(wnd, ...)
     if coroutine.status(wnd.co) == "dead" then return end
     local event = ...
@@ -645,14 +732,30 @@ local function hitTest(x, y)
     end
 end
 
+--- Deliver a mouse event into a window's content, converting to the app's
+-- coordinate space (virtual cells for legacy windows).
+local function contentMouse(wnd, event, button, wx, wy)
+    local cx, cy = wx - BORDER, wy - TITLE_H
+    local cw, ch = contentArea(wnd)
+    if cx < 1 or cy < 1 or cx > cw or cy > ch then return end
+    if wnd.vterm then
+        cx, cy = wnd.vterm.toVirtual(cx, cy)
+    end
+    if event == "mouse_move" then
+        resumeWindow(wnd, event, cx, cy)
+    else
+        resumeWindow(wnd, event, button, cx, cy)
+    end
+end
+
 local openCount = 0
 function launchApp(app, argument)
     openCount = openCount + 1
-    local w = math.min(app.w or math.floor(W * 0.72), W - 2)
-    local h = math.min(app.h or math.floor(H * 0.72), H - 2)
-    local x = math.min(3 + (openCount % 5) * 3, W - w + 1)
-    local y = math.min(2 + (openCount % 4), H - h)
-    return openWindow(app.name, x, y, w, h, function(wnd)
+    local w = math.min(app.w or math.floor(W * 0.78), W - 10)
+    local h = math.min(app.h or math.floor(H * 0.78), H - TASKBAR_H - 6)
+    local x = math.min(10 + (openCount % 5) * 14, W - w + 1)
+    local y = math.min(6 + (openCount % 4) * 8, H - TASKBAR_H - h)
+    return openWindow(app.name, x, y, w, h, app.kind or "pixel", function(wnd)
         app.fn(wnd, argument)
     end)
 end
@@ -662,29 +765,27 @@ end
 -- third-party apps loaded from /apps).
 -- ------------------------------------------------------------------
 
---- Draw a centred sheet frame over the current term, returning its rect.
+--- A centred sheet frame over the current (pixel) term. Returns a canvas and rect.
 local function sheetFrame(height)
-    local tw, th = term.getSize()
-    local w = math.max(12, tw - 4)
+    local current = term.current()
+    local sheet = gfx.new(current)
+    local tw, th = current.getSize()
+    local w = math.max(120, tw - 24)
     local x = math.floor((tw - w) / 2) + 1
     local y = math.max(1, math.floor((th - height) / 2))
-    term.setBackgroundColour(colours.lightGrey)
-    for i = 0, height - 1 do
-        term.setCursorPos(x, y + i)
-        term.write((" "):rep(w))
-    end
-    return x, y, w, height
+    sheet:rect(x, y, w, height, colours.lightGrey)
+    sheet:frame(x, y, w, height, colours.grey)
+    return sheet, x, y, w, height
 end
 
-local function sheetButtons(x, y, w, buttons)
-    local bx = x + 1
+local function sheetButtons(sheet, x, y, buttons)
+    local bx = x + 6
     for _, button in ipairs(buttons) do
-        button.x, button.y, button.w = bx, y, #button.label + 2
-        term.setCursorPos(bx, y)
-        term.setBackgroundColour(button.colour)
-        term.setTextColour(colours.white)
-        term.write(" " .. button.label .. " ")
-        bx = bx + button.w + 1
+        button.x, button.y = bx, y
+        button.w, button.h = sheet:textWidth(button.label, SMALL_W) + 10, MENU_ROW
+        sheet:rect(bx, y, button.w, button.h, button.colour)
+        sheet:text(bx + 5, y + 2, button.label, colours.white, button.colour, SMALL_W, SMALL_H)
+        bx = bx + button.w + 6
     end
 end
 
@@ -693,7 +794,7 @@ local function sheetWait(buttons)
         local event, a, b, c = os.pullEvent()
         if event == "mouse_click" then
             for _, button in ipairs(buttons) do
-                if c == button.y and b >= button.x and b < button.x + button.w then
+                if c >= button.y and c < button.y + button.h and b >= button.x and b < button.x + button.w then
                     return button.value
                 end
             end
@@ -704,80 +805,96 @@ local function sheetWait(buttons)
     end
 end
 
+--- A single-line text editor rendered with the pixel font.
+local function sheetInput(sheet, x, y, w, default)
+    local value = default or ""
+    local maxChars = math.floor((w - 8) / (GLYPH_W * SMALL_W))
+
+    local function draw()
+        sheet:rect(x, y, w, MENU_ROW, colours.white)
+        local shown = value:sub(-maxChars + 1)
+        local width = sheet:text(x + 4, y + 2, shown, colours.black, colours.white, SMALL_W, SMALL_H)
+        -- Caret.
+        sheet:rect(x + 4 + width, y + 2, 2, GLYPH_H * SMALL_H, colours.blue)
+    end
+    draw()
+
+    while true do
+        local event, a = os.pullEvent()
+        if event == "char" then
+            value = value .. a
+            draw()
+        elseif event == "key" then
+            if a == keys.enter then
+                return value
+            elseif a == keys.escape then
+                return nil
+            elseif a == keys.backspace and #value > 0 then
+                value = value:sub(1, -2)
+                draw()
+            end
+        end
+    end
+end
+
 mineosAPI = {
     version = VERSION,
 
     --- Show a message with an OK button.
     alert = function(title, message)
-        local x, y, w = sheetFrame(6)
-        term.setBackgroundColour(colours.lightGrey)
-        term.setTextColour(colours.black)
-        term.setCursorPos(x + 1, y + 1)
-        term.write(title:sub(1, w - 2))
-        term.setTextColour(colours.grey)
-        term.setCursorPos(x + 1, y + 2)
-        term.write(tostring(message):sub(1, w - 2))
+        local sheet, x, y, w = sheetFrame(MENU_ROW * 4)
+        sheet:text(x + 6, y + 4, tostring(title), colours.black, colours.lightGrey, SMALL_W, SMALL_H)
+        sheet:text(x + 6, y + 4 + MENU_ROW, tostring(message):sub(1, 60), colours.grey, colours.lightGrey, SMALL_W, SMALL_H)
         local buttons = { { label = "OK", colour = theme.accent, value = true } }
-        sheetButtons(x, y + 4, w, buttons)
+        sheetButtons(sheet, x, y + MENU_ROW * 4 - MENU_ROW - 4, buttons)
         sheetWait(buttons)
     end,
 
     --- Ask a yes/no question. Returns true for yes.
     confirm = function(title, message)
-        local x, y, w = sheetFrame(6)
-        term.setBackgroundColour(colours.lightGrey)
-        term.setTextColour(colours.black)
-        term.setCursorPos(x + 1, y + 1)
-        term.write(title:sub(1, w - 2))
-        term.setTextColour(colours.grey)
-        term.setCursorPos(x + 1, y + 2)
-        term.write(tostring(message):sub(1, w - 2))
+        local sheet, x, y, w = sheetFrame(MENU_ROW * 4)
+        sheet:text(x + 6, y + 4, tostring(title), colours.black, colours.lightGrey, SMALL_W, SMALL_H)
+        sheet:text(x + 6, y + 4 + MENU_ROW, tostring(message):sub(1, 60), colours.grey, colours.lightGrey, SMALL_W, SMALL_H)
         local buttons = {
             { label = "Yes", colour = theme.accent, value = true },
             { label = "No", colour = colours.grey, value = false },
         }
-        sheetButtons(x, y + 4, w, buttons)
+        sheetButtons(sheet, x, y + MENU_ROW * 4 - MENU_ROW - 4, buttons)
         return sheetWait(buttons)
     end,
 
     --- Prompt for a line of text. Returns the string, or nil if cancelled.
     prompt = function(title, default)
-        local x, y, w = sheetFrame(5)
-        term.setBackgroundColour(colours.lightGrey)
-        term.setTextColour(colours.black)
-        term.setCursorPos(x + 1, y + 1)
-        term.write(title:sub(1, w - 2))
-        term.setCursorPos(x + 1, y + 3)
-        term.setTextColour(colours.grey)
-        term.write("(enter to accept, empty to cancel)")
-        term.setCursorPos(x + 1, y + 2)
-        term.setBackgroundColour(colours.white)
-        term.setTextColour(colours.black)
-        term.write((" "):rep(w - 2))
-        term.setCursorPos(x + 1, y + 2)
-        local value = read(nil, nil, nil, default)
+        local sheet, x, y, w = sheetFrame(MENU_ROW * 4)
+        sheet:text(x + 6, y + 4, tostring(title), colours.black, colours.lightGrey, SMALL_W, SMALL_H)
+        sheet:text(x + 6, y + MENU_ROW * 4 - MENU_ROW, "enter accepts, escape cancels", colours.grey, colours.lightGrey, SMALL_W, SMALL_H)
+        local value = sheetInput(sheet, x + 6, y + 4 + MENU_ROW, w - 12, default)
         if value == "" then return nil end
         return value
     end,
 
-    --- Show a menu anchored at (x, y) in the app's terminal. Items are a
-    -- list of strings; returns the chosen index and string, or nil.
+    --- Show a menu anchored at (x, y) in the app's terminal (cell coords).
+    -- Items are a list of strings; returns the chosen index and string, or nil.
     menu = function(x, y, items)
-        local tw, th = term.getSize()
-        local w = 4
+        local current = term.current()
+        local am = gfx.new(current)
+        local tw, th = current.getSize()
+        local w = 40
         for _, label in ipairs(items) do
-            if #label + 2 > w then w = #label + 2 end
+            w = math.max(w, am:textWidth(label, SMALL_W) + 12)
         end
+        local h = #items * MENU_ROW
         x = math.max(1, math.min(x, tw - w + 1))
-        y = math.max(1, math.min(y, th - #items + 1))
+        y = math.max(1, math.min(y, th - h + 1))
 
         local hover = nil
         local function draw()
+            am:rect(x, y, w, h, theme.menuBg)
             for i, label in ipairs(items) do
-                term.setCursorPos(x, y + i - 1)
-                term.setBackgroundColour(hover == i and theme.menuHover or theme.menuBg)
-                term.setTextColour(hover == i and theme.menuHoverText or theme.menuText)
-                term.write(" " .. label .. (" "):rep(w - #label - 1))
+                local rowY = y + (i - 1) * MENU_ROW
+                if hover == i then am:rect(x, rowY, w, MENU_ROW, theme.menuHover) end
+                am:text(x + 6, rowY + 2, label, hover == i and theme.menuHoverText or theme.menuText,
+                    hover == i and theme.menuHover or theme.menuBg, SMALL_W, SMALL_H)
             end
         end
         draw()
@@ -785,14 +902,16 @@ mineosAPI = {
         while true do
             local event, a, b, c = os.pullEvent()
             if event == "mouse_click" then
-                if b >= x and b < x + w and c >= y and c < y + #items then
-                    local index = c - y + 1
+                if b >= x and b < x + w and c >= y and c < y + h then
+                    local index = math.floor((c - y) / MENU_ROW) + 1
                     return index, items[index]
                 end
                 return nil
             elseif event == "mouse_move" then
                 local index
-                if a >= x and a < x + w and b >= y and b < y + #items then index = b - y + 1 end
+                if a >= x and a < x + w and b >= y and b < y + h then
+                    index = math.floor((b - y) / MENU_ROW) + 1
+                end
                 if index ~= hover then
                     hover = index
                     draw()
@@ -809,17 +928,13 @@ mineosAPI = {
         end
     end,
 
-    --- Open a file with the default handler (edit for text, a shell for .lua).
+    --- Open a file with the default handler.
     open = function(path) mineosAPI.openFile(path) end,
 
     openFile = function(path)
         path = "/" .. fs.combine(path, "")
         if path:sub(-4) == ".lua" then
-            launchApp({ name = fs.getName(path), fn = function()
-                term.setBackgroundColour(colours.black)
-                term.setTextColour(colours.white)
-                term.clear()
-                term.setCursorPos(1, 1)
+            launchApp({ name = fs.getName(path), kind = "legacy", fn = function()
                 shell.run(path)
                 print()
                 term.setTextColour(colours.lightGrey)
@@ -833,7 +948,7 @@ mineosAPI = {
             end
             if paint then launchApp(paint, path) end
         else
-            launchApp({ name = "Edit: " .. fs.getName(path), fn = function()
+            launchApp({ name = "Edit: " .. fs.getName(path), kind = "legacy", fn = function()
                 shell.run("/rom/programs/edit.lua", path)
             end })
         end
@@ -847,6 +962,13 @@ mineosAPI = {
         return false
     end,
 
+    --- The pixel-drawing toolkit (see mineos.gfx). Apps can call
+    -- mineos.gfx.new(term.current()) to draw pixel graphics and text.
+    gfx = gfx,
+
+    --- Text metric constants for pixel apps.
+    text = { SMALL_W = SMALL_W, SMALL_H = SMALL_H, LARGE_W = LARGE_W, LARGE_H = LARGE_H, ROW = MENU_ROW },
+
     --- Ask MineOS to exit.
     quit = function() running = false end,
 }
@@ -856,10 +978,6 @@ mineosAPI = {
 -- ------------------------------------------------------------------
 
 local function appTerminal()
-    term.setBackgroundColour(colours.black)
-    term.setTextColour(colours.white)
-    term.clear()
-    term.setCursorPos(1, 1)
     shell.run("shell")
 end
 
@@ -867,6 +985,7 @@ local function appFiles(wnd)
     local dir = ""
     local scroll = 0
     local selected = nil
+    local ROW = MENU_ROW
 
     local function entries()
         local ok, list = pcall(fs.list, dir)
@@ -881,55 +1000,51 @@ local function appFiles(wnd)
 
     local list = entries()
 
+    local function rowsVisible()
+        local _, th = term.current().getSize()
+        return math.floor((th - ROW) / ROW)
+    end
+
     local function draw()
-        local tw, th = term.getSize()
-        term.setBackgroundColour(theme.body)
-        term.clear()
+        local current = term.current()
+        local ag = gfx.new(current)
+        local tw, th = current.getSize()
+        ag:rect(1, 1, tw, th, theme.body)
 
-        -- Toolbar: up button, path, new file/folder.
-        term.setCursorPos(1, 1)
-        term.setBackgroundColour(colours.lightGrey)
-        term.clearLine()
-        term.setCursorPos(1, 1)
-        term.setBackgroundColour(dir ~= "" and theme.accent or colours.grey)
-        term.setTextColour(colours.white)
-        term.write(" ^ ")
-        term.setBackgroundColour(colours.lightGrey)
-        term.setTextColour(colours.black)
-        term.write(" /" .. dir)
-        local newLabels = " +file +dir "
-        term.setCursorPos(tw - #newLabels + 1, 1)
-        term.setTextColour(colours.grey)
-        term.write(newLabels)
+        -- Toolbar: up, path, new file/folder.
+        ag:rect(1, 1, tw, ROW, colours.lightGrey)
+        ag:rect(1, 1, 22, ROW, dir ~= "" and theme.accent or colours.grey)
+        ag:text(8, 3, "^", colours.white, dir ~= "" and theme.accent or colours.grey, SMALL_W, SMALL_H)
+        ag:text(28, 3, ("/" .. dir):sub(1, 24), colours.black, colours.lightGrey, SMALL_W, SMALL_H)
+        local newDirW = ag:textWidth("+dir", SMALL_W) + 8
+        local newFileW = ag:textWidth("+file", SMALL_W) + 8
+        ag:text(tw - newDirW - newFileW - 8, 3, "+file", colours.grey, colours.lightGrey, SMALL_W, SMALL_H)
+        ag:text(tw - newDirW - 2, 3, "+dir", colours.grey, colours.lightGrey, SMALL_W, SMALL_H)
 
-        for i = 1, th - 1 do
+        for i = 1, rowsVisible() do
             local name = list[i + scroll]
             if not name then break end
             local path = fs.combine(dir, name)
-            term.setCursorPos(1, i + 1)
-            term.setBackgroundColour(selected == i + scroll and theme.selection or theme.body)
-            term.clearLine()
-            term.setCursorPos(2, i + 1)
+            local y = ROW + (i - 1) * ROW + 1
+            local bg = selected == i + scroll and theme.selection or theme.body
+            ag:rect(1, y, tw, ROW, bg)
+            local colour = colours.black
+            local label = name
             if fs.isDir(path) then
-                term.setTextColour(colours.blue)
-                term.write("[" .. name .. "]")
+                colour = colours.blue
+                label = "[" .. name .. "]"
             elseif name:sub(-4) == ".lua" then
-                term.setTextColour(colours.green)
-                term.write(name)
+                colour = colours.green
             elseif name:sub(-4) == ".nfp" then
-                term.setTextColour(colours.magenta)
-                term.write(name)
-            else
-                term.setTextColour(colours.black)
-                term.write(name)
+                colour = colours.magenta
             end
+            ag:text(8, y + 2, label:sub(1, 40), colour, bg, SMALL_W, SMALL_H)
         end
     end
 
     local function refresh()
         list = entries()
-        local tw, th = term.getSize()
-        scroll = math.max(0, math.min(scroll, #list - (th - 1)))
+        scroll = math.max(0, math.min(scroll, #list - rowsVisible()))
         if selected and not list[selected] then selected = nil end
         draw()
     end
@@ -955,10 +1070,12 @@ local function appFiles(wnd)
             refresh()
         elseif choice == "Open" or choice == "Run" then
             mineosAPI.openFile(path)
+            draw()
         elseif choice == "Edit" then
-            launchApp({ name = "Edit: " .. name, fn = function()
+            launchApp({ name = "Edit: " .. name, kind = "legacy", fn = function()
                 shell.run("/rom/programs/edit.lua", "/" .. path)
             end })
+            draw()
         elseif choice == "Rename" then
             local newName = mineosAPI.prompt("Rename " .. name, name)
             if newName and newName ~= name then
@@ -980,31 +1097,31 @@ local function appFiles(wnd)
     draw()
     while true do
         local event, a, b, c = os.pullEvent()
-        local tw, th = term.getSize()
+        local tw = term.current().getSize()
         if event == "mouse_click" then
             local button, x, y = a, b, c
-            if y == 1 then
-                if x <= 3 then
+            if y <= ROW then
+                if x <= 22 then
                     if dir ~= "" then
                         dir = fs.getDir(dir)
                         if dir == ".." then dir = "" end
                         scroll, selected = 0, nil
                         refresh()
                     end
-                elseif x > tw - 12 and x <= tw - 5 then
+                elseif x > tw - 110 and x <= tw - 55 then
                     local name = mineosAPI.prompt("New file name")
                     if name then
                         local handle = fs.open(fs.combine(dir, name), "w")
                         if handle then handle.close() end
                     end
                     refresh()
-                elseif x > tw - 5 then
+                elseif x > tw - 55 then
                     local name = mineosAPI.prompt("New folder name")
                     if name then pcall(fs.makeDir, fs.combine(dir, name)) end
                     refresh()
                 end
             else
-                local index = y - 1 + scroll
+                local index = math.floor((y - ROW - 1) / ROW) + 1 + scroll
                 if list[index] then
                     if button == 2 then
                         selected = index
@@ -1018,18 +1135,19 @@ local function appFiles(wnd)
                             refresh()
                         else
                             mineosAPI.openFile(path)
+                            draw()
                         end
                     else
                         selected = index
                         draw()
                     end
-                else
+                elseif selected then
                     selected = nil
                     draw()
                 end
             end
         elseif event == "mouse_scroll" then
-            scroll = math.max(0, math.min(scroll + a, math.max(0, #list - (th - 1))))
+            scroll = math.max(0, math.min(scroll + a, math.max(0, #list - rowsVisible())))
             draw()
         elseif event == "term_resize" then
             refresh()
@@ -1037,37 +1155,32 @@ local function appFiles(wnd)
     end
 end
 
-local function appSettings(wnd)
-    local function densityLabel()
-        local scale = 1
-        if nativeTerm and nativeTerm.getResolution then
-            local ok, value = pcall(nativeTerm.getResolution)
-            if ok then scale = value end
-        end
-        return ("%dx (%dx%d)"):format(scale, W, H)
-    end
-
+local function appSettings()
     local rows
+
+    local function densityLabel()
+        return density == 15 and "15x quality" or "10x fast"
+    end
 
     local function buildRows()
         rows = {
             {
                 label = "Boot into MineOS by default",
-                value = function() return settings.get("mineos.autostart") and "[on ]" or "[off]" end,
+                value = function() return settings.get("mineos.autostart") and "on" or "off" end,
                 action = function()
                     settings.set("mineos.autostart", not settings.get("mineos.autostart"))
                 end,
             },
             {
-                label = "Mirror display to monitors (restart MineOS)",
-                value = function() return settings.get("mineos.mirror") and "[on ]" or "[off]" end,
+                label = "Mirror display to monitors (restart)",
+                value = function() return settings.get("mineos.mirror") and "on" or "off" end,
                 action = function()
                     settings.set("mineos.mirror", not settings.get("mineos.mirror"))
                 end,
             },
             {
                 label = "MineOS mouse cursor",
-                value = function() return settings.get("mineos.pointer") and "[on ]" or "[off]" end,
+                value = function() return settings.get("mineos.pointer") and "on" or "off" end,
                 action = function()
                     local enabled = not settings.get("mineos.pointer")
                     settings.set("mineos.pointer", enabled)
@@ -1079,19 +1192,16 @@ local function appSettings(wnd)
             },
             {
                 label = "Pixel density",
-                value = function() return "[" .. densityLabel() .. "]" end,
+                value = densityLabel,
                 action = function()
-                    local scale = settings.get("mineos.density")
-                    if type(scale) ~= "number" then scale = 3 end
-                    scale = scale % 10 + 1
+                    local scale = density == 15 and 10 or 15
                     settings.set("mineos.density", scale)
                     os.queueEvent("mineos_density", scale)
                 end,
-                supported = nativeTerm and nativeTerm.setResolution ~= nil,
             },
             {
                 label = "Wallpaper colour",
-                value = function() return "[" .. tostring(settings.get("mineos.wallpaper")):sub(1, 10) .. "]" end,
+                value = function() return tostring(settings.get("mineos.wallpaper")):sub(1, 10) end,
                 action = function()
                     local current = settings.get("mineos.wallpaper")
                     local index = 0
@@ -1106,39 +1216,34 @@ local function appSettings(wnd)
     end
     buildRows()
 
+    local ROW = MENU_ROW + 4
+
     local function draw()
-        term.setBackgroundColour(theme.body)
-        term.clear()
-        term.setCursorPos(2, 1)
-        term.setTextColour(colours.black)
-        term.write("Settings")
+        local current = term.current()
+        local ag = gfx.new(current)
+        local tw, th = current.getSize()
+        ag:rect(1, 1, tw, th, theme.body)
+        ag:text(8, 4, "Settings", colours.black, theme.body, LARGE_W, 2)
 
         for i, row in ipairs(rows) do
-            term.setCursorPos(2, 2 + i)
-            if row.supported == false then
-                term.setTextColour(colours.lightGrey)
-                term.write(row.value() .. " " .. row.label .. " (unavailable)")
-            else
-                local value = row.value()
-                term.setTextColour(value == "[off]" and colours.red or colours.green)
-                term.write(value)
-                term.setTextColour(colours.black)
-                term.write(" " .. row.label)
-            end
+            local y = 24 + (i - 1) * ROW
+            local value = row.value()
+            local valueColour = value == "off" and colours.red or colours.green
+            ag:rect(8, y, 44, MENU_ROW, colours.lightGrey)
+            ag:text(8 + math.floor((44 - ag:textWidth(value, SMALL_W)) / 2), y + 2, value, valueColour, colours.lightGrey, SMALL_W, SMALL_H)
+            ag:text(60, y + 2, row.label, colours.black, theme.body, SMALL_W, SMALL_H)
         end
 
-        local _, th = term.getSize()
-        term.setCursorPos(2, th)
-        term.setTextColour(colours.lightGrey)
-        term.write("Click a row to change it.")
+        ag:text(8, 24 + #rows * ROW + 4, "Click a value to change it.", colours.lightGrey, theme.body, SMALL_W, SMALL_H)
     end
 
     draw()
     while true do
         local event, a, b, c = os.pullEvent()
         if event == "mouse_click" and a == 1 then
-            local row = rows[c - 2]
-            if row and row.supported ~= false then
+            local index = math.floor((c - 24) / ROW) + 1
+            local row = rows[index]
+            if row and c >= 24 + (index - 1) * ROW and c < 24 + (index - 1) * ROW + MENU_ROW and b >= 8 and b < 52 then
                 row.action()
                 settings.save()
                 buildRows()
@@ -1172,64 +1277,61 @@ local function appPaint(wnd, path)
         colours.brown, colours.green, colours.red, colours.black,
     }
 
-    local function draw()
-        local tw, th = term.getSize()
-        term.setBackgroundColour(colours.black)
-        term.clear()
+    local TOP = MENU_ROW
+    local SWATCH = 14
+    -- Paint pixels are square 3x2 cell blocks.
+    local PX_W, PX_H = 3, 2
 
-        -- Palette + actions.
+    local function draw()
+        local currentTerm = term.current()
+        local ag = gfx.new(currentTerm)
+        local tw, th = currentTerm.getSize()
+        ag:rect(1, 1, tw, th, colours.black)
+
+        -- Toolbar: palette, save, clear.
+        ag:rect(1, 1, tw, TOP, colours.grey)
         for i, colour in ipairs(ORDER) do
-            term.setCursorPos(i, 1)
-            term.setBackgroundColour(colour)
-            term.write(colour == current and "\7" or " ")
+            ag:rect((i - 1) * SWATCH + 1, 1, SWATCH, TOP, colour)
+            if colour == current then
+                ag:rect((i - 1) * SWATCH + 5, 4, 4, 4, colour == colours.white and colours.black or colours.white)
+            end
         end
-        term.setCursorPos(18, 1)
-        term.setBackgroundColour(colours.grey)
-        term.setTextColour(colours.white)
-        term.write(" save ")
-        term.setCursorPos(25, 1)
-        term.write(" clear ")
-        term.setCursorPos(tw - 12, 1)
-        term.setTextColour(colours.lightGrey)
-        term.write("rmb erases")
+        local saveX = 16 * SWATCH + 8
+        ag:text(saveX, 3, "save", colours.white, colours.grey, SMALL_W, SMALL_H)
+        ag:text(saveX + 60, 3, "clear", colours.white, colours.grey, SMALL_W, SMALL_H)
 
         -- Canvas.
-        for y = 2, th do
-            for x = 1, tw do
-                local colour = image[y - 1] and image[y - 1][x]
-                term.setCursorPos(x, y)
-                term.setBackgroundColour(colour or colours.black)
-                term.write(colour and " " or (x + y) % 2 == 0 and "\127" or " ")
-                if not colour then term.setTextColour(colours.grey) end
+        for y, row in pairs(image) do
+            for x, colour in pairs(row) do
+                ag:rect((x - 1) * PX_W + 1, TOP + (y - 1) * PX_H + 1, PX_W, PX_H, colour)
             end
         end
     end
 
     local function paintAt(x, y, erase)
-        if y < 2 then return end
-        local row = image[y - 1]
+        if y <= TOP then return end
+        local px = math.floor((x - 1) / PX_W) + 1
+        local py = math.floor((y - TOP - 1) / PX_H) + 1
+        local ag = gfx.new(term.current())
         if erase then
-            if row then row[x] = nil end
+            if image[py] then image[py][px] = nil end
+            ag:rect((px - 1) * PX_W + 1, TOP + (py - 1) * PX_H + 1, PX_W, PX_H, colours.black)
         else
-            if not row then
-                row = {}
-                image[y - 1] = row
-            end
-            row[x] = current
+            image[py] = image[py] or {}
+            image[py][px] = current
+            ag:rect((px - 1) * PX_W + 1, TOP + (py - 1) * PX_H + 1, PX_W, PX_H, current)
         end
-        term.setCursorPos(x, y)
-        term.setBackgroundColour(erase and colours.black or current)
-        term.setTextColour(colours.grey)
-        term.write(erase and ((x + y) % 2 == 0 and "\127" or " ") or " ")
     end
 
     local function save()
         local target = mineosAPI.prompt("Save image as", path or "/image.nfp")
-        if not target then return end
+        if not target then
+            draw()
+            return
+        end
         if target:sub(-4) ~= ".nfp" then target = target .. ".nfp" end
 
-        local maxY = 0
-        local maxX = 0
+        local maxY, maxX = 0, 0
         for y, row in pairs(image) do
             for x in pairs(row) do
                 if y > maxY then maxY = y end
@@ -1240,6 +1342,7 @@ local function appPaint(wnd, path)
         local handle, err = fs.open(target, "w")
         if not handle then
             mineosAPI.alert("Save failed", err)
+            draw()
             return
         end
         for y = 1, maxY do
@@ -1260,14 +1363,15 @@ local function appPaint(wnd, path)
     while true do
         local event, button, x, y = os.pullEvent()
         if event == "mouse_click" or event == "mouse_drag" then
-            if y == 1 and event == "mouse_click" then
-                if x <= 16 and ORDER[x] then
-                    current = ORDER[x]
+            local tw = term.current().getSize()
+            if y <= TOP and event == "mouse_click" then
+                local swatch = math.floor((x - 1) / SWATCH) + 1
+                if swatch >= 1 and swatch <= 16 then
+                    current = ORDER[swatch]
                     draw()
-                elseif x >= 18 and x <= 23 then
+                elseif x >= 16 * SWATCH + 8 and x < 16 * SWATCH + 60 then
                     save()
-                    draw()
-                elseif x >= 25 and x <= 31 then
+                elseif x >= 16 * SWATCH + 68 then
                     if mineosAPI.confirm("Clear canvas", "Erase everything?") then image = {} end
                     draw()
                 end
@@ -1281,33 +1385,30 @@ local function appPaint(wnd, path)
 end
 
 local function appTasks(wnd)
+    local ROW = MENU_ROW + 2
+
     local function draw()
-        local tw, th = term.getSize()
-        term.setBackgroundColour(theme.body)
-        term.clear()
-        term.setCursorPos(2, 1)
-        term.setTextColour(colours.black)
-        term.write("Task manager")
+        local current = term.current()
+        local ag = gfx.new(current)
+        local tw, th = current.getSize()
+        ag:rect(1, 1, tw, th, theme.body)
+        ag:text(8, 4, "Task manager", colours.black, theme.body, LARGE_W, 2)
 
         for i, other in ipairs(windows) do
-            if i + 2 > th - 1 then break end
-            term.setCursorPos(2, 1 + i)
-            term.setTextColour(other == wnd and colours.grey or colours.black)
+            local y = 24 + (i - 1) * ROW
+            if y + ROW > th - MENU_ROW * 2 then break end
             local status = other.minimised and "minimised" or coroutine.status(other.co)
-            term.write(("%2d %-16s %-10s"):format(i, other.title:sub(1, 16), status))
+            ag:text(8, y, ("%d %s"):format(i, other.title:sub(1, 16)), other == wnd and colours.grey or colours.black, theme.body, SMALL_W, SMALL_H)
+            ag:text(240, y, status, colours.grey, theme.body, SMALL_W, SMALL_H)
             if other ~= wnd then
-                term.setCursorPos(tw - 6, 1 + i)
-                term.setTextColour(colours.red)
-                term.write("[end]")
+                ag:rect(tw - 60, y, 52, MENU_ROW, theme.close)
+                ag:text(tw - 60 + 8, y + 2, "end", colours.white, theme.close, SMALL_W, SMALL_H)
             end
         end
 
         local uptime = math.floor(os.clock() - startClock)
-        term.setCursorPos(2, th - 1)
-        term.setTextColour(colours.grey)
-        term.write(("Screen %dx%d  Uptime %d:%02d"):format(W, H, math.floor(uptime / 60), uptime % 60))
-        term.setCursorPos(2, th)
-        term.write(("Memory %.0f KB  Runtime %s"):format(collectgarbage("count"), _VERSION))
+        ag:text(8, th - MENU_ROW * 2, ("Screen %dx%d  Uptime %d:%02d"):format(W, H, math.floor(uptime / 60), uptime % 60), colours.grey, theme.body, SMALL_W, SMALL_H)
+        ag:text(8, th - MENU_ROW, ("Memory %.0f KB  Runtime %s"):format(collectgarbage("count"), _VERSION), colours.grey, theme.body, SMALL_W, SMALL_H)
     end
 
     draw()
@@ -1318,9 +1419,10 @@ local function appTasks(wnd)
             draw()
             timer = os.startTimer(1)
         elseif event == "mouse_click" then
-            local tw = term.getSize()
-            local target = windows[c - 1]
-            if target and target ~= wnd and b >= tw - 6 and b <= tw - 2 then
+            local tw = term.current().getSize()
+            local index = math.floor((c - 24) / ROW) + 1
+            local target = windows[index]
+            if target and target ~= wnd and b >= tw - 60 and b < tw - 8 and c >= 24 + (index - 1) * ROW and c < 24 + (index - 1) * ROW + MENU_ROW then
                 closeWindow(target)
                 draw()
             end
@@ -1332,18 +1434,18 @@ end
 
 local function appAbout()
     local function draw()
-        local tw, th = term.getSize()
-        term.setBackgroundColour(theme.body)
-        term.clear()
+        local current = term.current()
+        local ag = gfx.new(current)
+        local tw, th = current.getSize()
+        ag:rect(1, 1, tw, th, theme.body)
 
+        ag:text(8, 4, "MineOS " .. VERSION, theme.accent, theme.body, LARGE_W, 3)
         local lines = {
-            { "MineOS " .. VERSION, colours.blue },
-            { "One step up from CraftOS.", colours.black },
+            { "A pixel-graphics desktop, one step up from CraftOS.", colours.black },
             { "", colours.black },
-            { "Runtime: " .. _VERSION .. " (" .. _HOST .. ")", colours.black },
+            { "Runtime " .. _VERSION .. "  Screen " .. W .. "x" .. H .. " pixels", colours.grey },
             { "", colours.black },
-            { "Drag title bars to move. Drag the \127 corner", colours.grey },
-            { "to resize. - minimises, + maximises.", colours.grey },
+            { "Drag title bars to move, the corner grip to resize.", colours.grey },
             { "Right-click the desktop and files for menus.", colours.grey },
             { "Double-click icons to open them.", colours.grey },
             { "", colours.black },
@@ -1351,15 +1453,13 @@ local function appAbout()
             { "  --#name Hello", colours.green },
             { "  --#icon H", colours.green },
             { "  --#colour lime", colours.green },
-            { "  print(\"hi!\") mineos.alert(\"Hello\", \":)\")", colours.green },
+            { "  --#legacy true   (classic terminal app)", colours.green },
+            { "  print(\"hi!\")", colours.green },
         }
-        local y = 1
-        for _, line in ipairs(lines) do
-            if y > th then break end
-            term.setCursorPos(2, y)
-            term.setTextColour(line[2])
-            term.write(line[1]:sub(1, tw - 2))
-            y = y + 1
+        for i, line in ipairs(lines) do
+            local y = 4 + GLYPH_H * 3 + 6 + (i - 1) * MENU_ROW
+            if y + MENU_ROW > th then break end
+            ag:text(8, y, line[1]:sub(1, math.floor(tw / (GLYPH_W * SMALL_W)) - 2), line[2], theme.body, SMALL_W, SMALL_H)
         end
     end
 
@@ -1375,7 +1475,7 @@ end
 -- ------------------------------------------------------------------
 local BUILTIN_APPS = {
     { name = "Files", icon = "=", colour = colours.orange, fn = appFiles },
-    { name = "Terminal", icon = ">", colour = colours.black, fn = appTerminal },
+    { name = "Terminal", icon = ">", colour = colours.black, fn = appTerminal, kind = "legacy" },
     { name = "Paint", icon = "~", colour = colours.magenta, fn = appPaint },
     { name = "Tasks", icon = "%", colour = colours.green, fn = appTasks },
     { name = "Settings", icon = "*", colour = colours.lightGrey, fn = appSettings },
@@ -1411,14 +1511,12 @@ function refreshApps()
                     icon = (meta.icon or file:sub(1, 1)):sub(1, 1):upper(),
                     colour = colours[meta.colour or ""] or colours.purple,
                     w = tonumber(meta.width), h = tonumber(meta.height),
+                    kind = meta.legacy == "true" and "legacy" or "pixel",
                     fn = function(wnd, argument)
                         local env = setmetatable({ mineos = mineosAPI }, { __index = _ENV })
                         local fn, err = loadfile(path, nil, env)
                         if not fn then error(err, 0) end
                         fn(argument)
-                        print()
-                        term.setTextColour(colours.lightGrey)
-                        print("(finished - click x to close)")
                         while true do os.pullEvent("never") end
                     end,
                 }
@@ -1440,15 +1538,16 @@ function openStartMenu()
     items[#items + 1] = { label = "Exit to CraftOS", action = function() running = false end }
     items[#items + 1] = { label = "Reboot", action = function() os.reboot() end }
     items[#items + 1] = { label = "Shut down", action = function() os.shutdown() end }
-    openMenu(1, H - #items, items)
+    openMenu(1, H - TASKBAR_H - #items * MENU_ROW, items)
 end
 
 local function openDesktopMenu(x, y)
     openMenu(x, y, {
         { label = "New file...", action = function()
-            launchApp({ name = "Edit", fn = function()
-                local name = mineosAPI.prompt("New file name")
-                if name then shell.run("/rom/programs/edit.lua", "/" .. fs.combine("", name)) end
+            launchApp({ name = "Edit", kind = "legacy", fn = function()
+                write("File name: ")
+                local name = read()
+                if name and name ~= "" then shell.run("/rom/programs/edit.lua", "/" .. fs.combine("", name)) end
             end })
         end },
         { label = "Refresh apps", action = function()
@@ -1477,8 +1576,9 @@ end
 -- ------------------------------------------------------------------
 local function handleClick(button, x, y)
     -- Taskbar.
-    if y == H then
-        if x <= 8 then
+    if y > H - TASKBAR_H then
+        local startW = g:textWidth("MineOS", SMALL_W) + 12
+        if x <= startW then
             if menu then closeMenu() else openStartMenu() end
             return
         end
@@ -1508,7 +1608,7 @@ local function handleClick(button, x, y)
         end
         for i, app in ipairs(APPS) do
             local ix, iy = iconPos(i)
-            if (y == iy and x >= ix and x <= ix + 2) or (y == iy + 1 and x >= ix - 1 and x <= ix + #app.name) then
+            if x >= ix and x < ix + SLOT_W and y >= iy - 2 and y < iy + SLOT_H - 4 then
                 if isDoubleClick("icon:" .. i) then
                     selectedIcon = nil
                     launchApp(app)
@@ -1528,15 +1628,15 @@ local function handleClick(button, x, y)
 
     if wnd ~= focused() then focusWindow(wnd) end
 
-    if wy == 1 then
+    if wy <= TITLE_H then
         -- Title bar.
         if button == 2 then
             openWindowMenu(wnd, x, y)
-        elseif wx == wnd.w then
+        elseif wx > wnd.w - BTN_W then
             closeWindow(wnd)
-        elseif wx == wnd.w - 1 then
+        elseif wx > wnd.w - BTN_W * 2 then
             toggleMaximise(wnd)
-        elseif wx == wnd.w - 2 then
+        elseif wx > wnd.w - BTN_W * 3 then
             minimiseWindow(wnd)
         elseif isDoubleClick(wnd) then
             toggleMaximise(wnd)
@@ -1546,12 +1646,12 @@ local function handleClick(button, x, y)
         return
     end
 
-    if wy == wnd.h and wx == wnd.w and not wnd.maximised then
+    if wy > wnd.h - GRIP_H and wx > wnd.w - GRIP_W and not wnd.maximised then
         resizing = { wnd = wnd }
         return
     end
 
-    resumeWindow(wnd, "mouse_click", button, wx, wy - 1)
+    contentMouse(wnd, "mouse_click", button, wx, wy)
 end
 
 local function handleEvent(event)
@@ -1562,8 +1662,8 @@ local function handleEvent(event)
         return
     end
 
-    -- Every mouse event carries a position: keep the pointer tracking through
-    -- clicks and drags, not just plain movement.
+    -- Every mouse event carries a position: the pointer tracks through clicks
+    -- and drags, not just plain movement.
     if name == "mouse_click" or name == "mouse_drag" or name == "mouse_up" or name == "mouse_scroll" then
         pointer.x, pointer.y = event[3], event[4]
         pointer.inside = true
@@ -1580,7 +1680,6 @@ local function handleEvent(event)
         -- Settings requested a new density. Resize the native terminal; the
         -- resulting term_resize event drives the relayout below.
         if nativeTerm and nativeTerm.setResolution and pcall(nativeTerm.setResolution, event[2]) then
-            ownsResolution = true
             density = event[2]
         end
     elseif name == "term_resize" then
@@ -1588,14 +1687,14 @@ local function handleEvent(event)
         screen.reposition(1, 1, W, H)
         for _, wnd in ipairs(windows) do
             if wnd.maximised then
-                wnd.x, wnd.y, wnd.w, wnd.h = 1, 1, W, H - 1
-                wnd.win.reposition(1, 1, W, H - 1)
+                wnd.x, wnd.y, wnd.w, wnd.h = 1, 1, W, H - TASKBAR_H
+                wnd.win.reposition(1, 1, wnd.w, wnd.h)
                 contentReposition(wnd)
                 resumeWindow(wnd, "term_resize")
             else
-                if wnd.w > W or wnd.h > H - 1 then
+                if wnd.w > W or wnd.h > H - TASKBAR_H then
                     wnd.w = math.min(wnd.w, W)
-                    wnd.h = math.min(wnd.h, H - 1)
+                    wnd.h = math.min(wnd.h, H - TASKBAR_H)
                     wnd.win.reposition(wnd.x, wnd.y, wnd.w, wnd.h)
                     contentReposition(wnd)
                     resumeWindow(wnd, "term_resize")
@@ -1609,9 +1708,8 @@ local function handleEvent(event)
     elseif name == "mouse_drag" then
         local x, y = event[3], event[4]
         if dragging or resizing then
-            -- Coalesce: a fast swipe queues many drag events. Remember only the
-            -- latest position and repaint once the burst has drained (the flush
-            -- marker is queued behind the pending input).
+            -- Coalesce: remember only the latest position and repaint once the
+            -- burst has drained (the flush marker queues behind pending input).
             local drag = dragging or resizing
             drag.pending = { x = x, y = y }
             if not drag.queued then
@@ -1620,8 +1718,8 @@ local function handleEvent(event)
             end
         else
             local wnd, wx, wy = hitTest(x, y)
-            if wnd and wnd == focused() and wy > 1 then
-                resumeWindow(wnd, "mouse_drag", event[2], wx, wy - 1)
+            if wnd and wnd == focused() then
+                contentMouse(wnd, "mouse_drag", event[2], wx, wy)
             end
         end
     elseif name == "mineos_flush" then
@@ -1641,24 +1739,23 @@ local function handleEvent(event)
             dragging, resizing = nil, nil
         else
             local wnd, wx, wy = hitTest(event[3], event[4])
-            if wnd and wnd == focused() and wy > 1 then
-                resumeWindow(wnd, "mouse_up", event[2], wx, wy - 1)
+            if wnd and wnd == focused() then
+                contentMouse(wnd, "mouse_up", event[2], wx, wy)
             end
         end
     elseif name == "mouse_scroll" then
         local wnd, wx, wy = hitTest(event[3], event[4])
-        if wnd and wnd == focused() and wy > 1 then
-            resumeWindow(wnd, "mouse_scroll", event[2], wx, wy - 1)
+        if wnd and wnd == focused() then
+            contentMouse(wnd, "mouse_scroll", event[2], wx, wy)
         end
     elseif name == "mouse_move" then
         pointer.x, pointer.y = event[2], event[3]
-        pointer.subX, pointer.subY = event[4] or 0, event[5] or 0
         pointer.inside = true
         pointer.seen = true
         if not dragging and not resizing then
             local wnd, wx, wy = hitTest(pointer.x, pointer.y)
-            if wnd and wy > 1 then
-                resumeWindow(wnd, "mouse_move", wx, wy - 1)
+            if wnd then
+                contentMouse(wnd, "mouse_move", nil, wx, wy)
             end
         end
     elseif name == "mouse_leave" then
@@ -1689,7 +1786,7 @@ redrawAll()
 clockTimer = os.startTimer(1)
 while running do
     -- The pointer stays stamped while we wait; lift it only while processing,
-    -- so apps never see (or overwrite) a stale arrow cell.
+    -- so apps never see (or overwrite) stale arrow pixels.
     local event = table.pack(os.pullEventRaw())
     pointerRestore()
     handleEvent(event)

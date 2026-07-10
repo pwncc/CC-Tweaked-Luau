@@ -1170,7 +1170,7 @@ static int termNativePaletteColour(lua_State* L) {
 static int termSetResolution(lua_State* L) {
     NativeTerm* t = getTerm(L);
     int scale = checkJavaInt(L, 1);
-    if (scale < 1 || scale > 10) luaL_error(L, "Expected scale in range 1-10");
+    if (scale < 1 || scale > 15) luaL_error(L, "Expected scale in range 1-15");
 
     int newWidth = t->baseWidth * scale;
     int newHeight = t->baseHeight * scale;

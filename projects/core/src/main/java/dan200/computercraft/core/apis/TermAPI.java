@@ -99,13 +99,13 @@ public class TermAPI extends TermMethods implements ILuaAPI {
      * Programs should check this function exists before calling it, and reset the resolution before exiting. A
      * {@code term_resize} event is queued after the resolution changes.
      *
-     * @param scale The resolution multiplier, between 1 and 10.
+     * @param scale The resolution multiplier, between 1 and 15.
      * @throws LuaException If the scale is out of range.
      * @cc.since 1.121.0
      */
     @LuaFunction
     public final void setResolution(int scale) throws LuaException {
-        if (scale < 1 || scale > 10) throw new LuaException("Expected scale in range 1-10");
+        if (scale < 1 || scale > 15) throw new LuaException("Expected scale in range 1-15");
         synchronized (terminal) {
             terminal.resize(baseWidth * scale, baseHeight * scale);
         }
