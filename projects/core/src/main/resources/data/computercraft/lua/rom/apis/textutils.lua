@@ -811,6 +811,8 @@ suitable for pretty printing.
 
     print(textutils.serialise(tbl, { compact = true }))
 ]]
+local native_serialize = _CC_NATIVE_TEXTUTILS and _CC_NATIVE_TEXTUTILS.serialize
+
 function serialize(t, opts)
     local tTracking = {}
     expect(2, opts, "table", "nil")
@@ -820,6 +822,13 @@ function serialize(t, opts)
         field(opts, "allow_repetitions", "boolean", "nil")
     else
         opts = {}
+    end
+
+    -- On the Luau runtime serialisation runs natively (with linear rather
+    -- than quadratic string building); serialize_impl above is the
+    -- reference implementation and the fallback for other runtimes.
+    if native_serialize then
+        return native_serialize(t, opts.compact or false, opts.allow_repetitions or false)
     end
     return serialize_impl(t, tTracking, "", opts)
 end
