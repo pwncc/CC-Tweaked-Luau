@@ -112,6 +112,28 @@ end
 
 bench("window_api", windowWorkload(window.create))
 
+bench("fs_lines", function()
+    -- Line-by-line file IO: write then re-read a 20,000 line log.
+    local handle = fs.open("bench.txt", "w")
+    for i = 1, 2e4 do
+        handle.writeLine("[12:34:56] a log line with some content #" .. i)
+    end
+    handle.close()
+
+    local count = 0
+    for _ = 1, 5 do
+        local read = fs.open("bench.txt", "r")
+        while true do
+            local line = read.readLine()
+            if not line then break end
+            count = count + #line
+        end
+        read.close()
+    end
+    fs.delete("bench.txt")
+    return count
+end)
+
 -- On runtimes with a native window API, also benchmark the reference Lua
 -- implementation for comparison.
 if _CC_NATIVE_WINDOW then
