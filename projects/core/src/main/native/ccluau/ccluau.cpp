@@ -158,6 +158,12 @@ struct MachineState {
     NativeTerm* term = nullptr;
     NativeRedstone* redstone = nullptr;
 
+    // The bitmap font used by the native pixel-graphics helpers, registered
+    // from Lua (mineos.gfx).
+    std::string fontData;
+    int fontWidth = 0;
+    int fontHeight = 0;
+
     // Whether Luau's native code generator (JIT) is active for this state.
     bool codegen = false;
 
@@ -1917,6 +1923,189 @@ static int nwCreate(lua_State* L) {
 }
 
 // ---------------------------------------------------------------------------
+// Native pixel graphics: fast paths for mineos.gfx and mineos.vterm. These
+// rasterise the CraftOS font (registered from Lua via setFont) directly into
+// a native window or the machine terminal, replacing per-glyph Lua loops.
+// Each function returns false when the target is not native, letting the Lua
+// side fall back to its reference implementation.
+// ---------------------------------------------------------------------------
+
+// Resolve a term-like target table at idx into the machine terminal or a
+// native window. Returns false for foreign redirects.
+static bool gfxResolveTarget(lua_State* L, int idx, NativeTerm** term, NativeWindow** win) {
+    *term = nullptr;
+    *win = nullptr;
+    if (lua_type(L, idx) != LUA_TTABLE) return false;
+    lua_getfield(L, idx, "__ccluau_term");
+    bool isTerm = lua_toboolean(L, -1) != 0;
+    lua_pop(L, 1);
+    if (isTerm) {
+        *term = getMachine(L)->term;
+        return *term != nullptr;
+    }
+    lua_getfield(L, idx, NW_SELF_FIELD);
+    if (lua_isuserdata(L, -1)) *win = static_cast<NativeWindow*>(lua_touserdata(L, -1));
+    lua_pop(L, 1);
+    return *win != nullptr;
+}
+
+// Write a row of cells to the resolved target at a 1-based position.
+static void gfxBlitRow(lua_State* L, int targetIdx, NativeTerm* t, NativeWindow* w, int x, int y, const char* txt, const char* fgs, const char* bgs, int len) {
+    if (t != nullptr) {
+        int x0 = x - 1, y0 = y - 1;
+        if (y0 < 0 || y0 >= t->height || len <= 0) return;
+        int start = x0 < 0 ? 0 : x0;
+        long long endL = (long long) x0 + len;
+        int end = endL > t->width ? t->width : (int) endL;
+        if (start >= end) return;
+        size_t row = (size_t) y0 * t->width;
+        memcpy(t->text.data() + row + start, txt + (start - x0), (size_t) (end - start));
+        memcpy(t->fg.data() + row + start, fgs + (start - x0), (size_t) (end - start));
+        memcpy(t->bg.data() + row + start, bgs + (start - x0), (size_t) (end - start));
+        t->markLine(y0);
+    } else {
+        nwBlitAt(L, w, targetIdx, x, y, txt, fgs, bgs, len);
+    }
+}
+
+// _CC_NATIVE_GFX.setFont(data, glyphWidth, glyphHeight)
+static int gfxSetFont(lua_State* L) {
+    size_t len;
+    const char* data = checkJavaString(L, 1, &len);
+    int glyphW = checkJavaInt(L, 2);
+    int glyphH = checkJavaInt(L, 3);
+    if (glyphW < 1 || glyphW > 8 || glyphH < 1 || glyphH > 32 || len != (size_t) 256 * glyphH) {
+        luaL_error(L, "Invalid font data");
+    }
+    MachineState* m = getMachine(L);
+    m->fontData.assign(data, len);
+    m->fontWidth = glyphW;
+    m->fontHeight = glyphH;
+    return 0;
+}
+
+// _CC_NATIVE_GFX.fillRect(target, x, y, width, height, colourHex) -> boolean
+static int gfxFillRect(lua_State* L) {
+    NativeTerm* t;
+    NativeWindow* w;
+    if (!gfxResolveTarget(L, 1, &t, &w)) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    int x = checkJavaInt(L, 2), y = checkJavaInt(L, 3);
+    int width = checkJavaInt(L, 4), height = checkJavaInt(L, 5);
+    size_t hexLen;
+    const char* hex = checkJavaString(L, 6, &hexLen);
+    if (hexLen < 1) luaL_error(L, "bad argument #6 (expected a colour character)");
+    if (width > 0 && height > 0) {
+        std::string spaces((size_t) width, ' ');
+        std::string colour((size_t) width, hex[0]);
+        for (int row = 0; row < height; row++) {
+            gfxBlitRow(L, 1, t, w, x, y + row, spaces.data(), colour.data(), colour.data(), width);
+        }
+    }
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+// _CC_NATIVE_GFX.drawText(target, x, y, text, fgHex, bgHex, pxW, pxH) -> false | widthInCells
+static int gfxDrawText(lua_State* L) {
+    NativeTerm* t;
+    NativeWindow* w;
+    if (!gfxResolveTarget(L, 1, &t, &w)) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    MachineState* m = getMachine(L);
+    if (m->fontData.empty()) luaL_error(L, "No font registered");
+
+    int x = checkJavaInt(L, 2), y = checkJavaInt(L, 3);
+    size_t textLen, fgLen, bgLen;
+    const char* text = checkJavaString(L, 4, &textLen);
+    const char* fgHex = checkJavaString(L, 5, &fgLen);
+    const char* bgHex = checkJavaString(L, 6, &bgLen);
+    if (fgLen < 1 || bgLen < 1) luaL_error(L, "bad argument (expected a colour character)");
+    int pxW = checkJavaInt(L, 7), pxH = checkJavaInt(L, 8);
+    if (pxW < 1 || pxW > 64 || pxH < 1 || pxH > 64) luaL_error(L, "Pixel size out of range");
+
+    int glyphW = m->fontWidth, glyphH = m->fontHeight;
+    size_t rowLen = textLen * glyphW * pxW;
+    std::string spaces(rowLen, ' ');
+    std::string colours(rowLen, bgHex[0]);
+
+    for (int fontRow = 0; fontRow < glyphH; fontRow++) {
+        size_t at = 0;
+        for (size_t i = 0; i < textLen; i++) {
+            int mask = m->fontData[(size_t) (unsigned char) text[i] * glyphH + fontRow] - 35;
+            for (int fx = 0; fx < glyphW; fx++) {
+                char colour = (mask >> fx) & 1 ? fgHex[0] : bgHex[0];
+                for (int sub = 0; sub < pxW; sub++) colours[at++] = colour;
+            }
+        }
+        for (int sub = 0; sub < pxH; sub++) {
+            gfxBlitRow(L, 1, t, w, x, y + fontRow * pxH + sub, spaces.data(), colours.data(), colours.data(), (int) rowLen);
+        }
+    }
+
+    lua_pushinteger(L, (int) (textLen * glyphW * pxW));
+    return 1;
+}
+
+// _CC_NATIVE_GFX.drawGlyphRow(target, x, y, text, fgStr, bgStr, pxW, pxH) -> boolean
+//
+// Renders a row of terminal cells as font pixels, with per-cell colours: the
+// mineos.vterm hot path.
+static int gfxDrawGlyphRow(lua_State* L) {
+    NativeTerm* t;
+    NativeWindow* w;
+    if (!gfxResolveTarget(L, 1, &t, &w)) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    MachineState* m = getMachine(L);
+    if (m->fontData.empty()) luaL_error(L, "No font registered");
+
+    int x = checkJavaInt(L, 2), y = checkJavaInt(L, 3);
+    size_t textLen, fgLen, bgLen;
+    const char* text = checkJavaString(L, 4, &textLen);
+    const char* fgs = checkJavaString(L, 5, &fgLen);
+    const char* bgs = checkJavaString(L, 6, &bgLen);
+    if (fgLen != textLen || bgLen != textLen) luaL_error(L, "Arguments must be the same length");
+    int pxW = checkJavaInt(L, 7), pxH = checkJavaInt(L, 8);
+    if (pxW < 1 || pxW > 64 || pxH < 1 || pxH > 64) luaL_error(L, "Pixel size out of range");
+
+    int glyphW = m->fontWidth, glyphH = m->fontHeight;
+    size_t rowLen = textLen * glyphW * pxW;
+    std::string spaces(rowLen, ' ');
+    std::string colours(rowLen, 'f');
+
+    for (int fontRow = 0; fontRow < glyphH; fontRow++) {
+        size_t at = 0;
+        for (size_t i = 0; i < textLen; i++) {
+            int mask = m->fontData[(size_t) (unsigned char) text[i] * glyphH + fontRow] - 35;
+            for (int fx = 0; fx < glyphW; fx++) {
+                char colour = (mask >> fx) & 1 ? fgs[i] : bgs[i];
+                for (int sub = 0; sub < pxW; sub++) colours[at++] = colour;
+            }
+        }
+        for (int sub = 0; sub < pxH; sub++) {
+            gfxBlitRow(L, 1, t, w, x, y + fontRow * pxH + sub, spaces.data(), colours.data(), colours.data(), (int) rowLen);
+        }
+    }
+
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+static const luaL_Reg GFX_METHODS[] = {
+    { "setFont", gfxSetFont },
+    { "fillRect", gfxFillRect },
+    { "drawText", gfxDrawText },
+    { "drawGlyphRow", gfxDrawGlyphRow },
+    { nullptr, nullptr },
+};
+
+// ---------------------------------------------------------------------------
 // Native redstone (redstone/rs API)
 // ---------------------------------------------------------------------------
 static const char* SIDE_NAMES[6] = { "bottom", "top", "back", "front", "right", "left" };
@@ -2273,6 +2462,14 @@ JNIEXPORT jlong JNICALL Java_dan200_computercraft_core_lua_luau_LuauNative_creat
     // present (see that file for the reference Lua implementation).
     lua_pushcfunction(L, nwCreate, "window.create");
     lua_setglobal(L, "_CC_NATIVE_WINDOW");
+
+    // Native pixel-graphics helpers for mineos.gfx / mineos.vterm.
+    lua_createtable(L, 0, 4);
+    for (const luaL_Reg* reg = GFX_METHODS; reg->name != nullptr; reg++) {
+        lua_pushcfunction(L, reg->func, reg->name);
+        lua_setfield(L, -2, reg->name);
+    }
+    lua_setglobal(L, "_CC_NATIVE_GFX");
 
     // Emulate Lua 5.2's _ENV for chunks running in the default environment.
     // Chunks loaded with a custom environment get their own _ENV field (see

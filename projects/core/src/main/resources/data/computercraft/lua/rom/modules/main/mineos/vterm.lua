@@ -16,6 +16,12 @@ teletext drawing characters, so existing art keeps working.
 
 local FONT = require "mineos.font"
 
+-- On the Luau runtime rows render natively; the loop below is the fallback.
+local native = _CC_NATIVE_GFX
+if native and not pcall(native.setFont, FONT.data, FONT.width, FONT.height) then
+    native = nil
+end
+
 local HEX = "0123456789abcdef"
 local GLYPH_W, GLYPH_H = FONT.width, FONT.height
 
@@ -52,6 +58,20 @@ function vterm.new(parent, cols, rows, pxW, pxH)
     local function renderRow(y)
         local rowText, rowFg, rowBg = text[y], fg[y], bg[y]
         local showCursor = blink and curY == y and curX >= 1 and curX <= cols
+
+        if native then
+            local baseY = (y - 1) * cellH + 1
+            if native.drawGlyphRow(parent, 1, baseY, rowText, rowFg, rowBg, pxW, pxH) then
+                if showCursor then
+                    -- Overlay the cursor cell with an underscore.
+                    native.drawGlyphRow(
+                        parent, (curX - 1) * cellW + 1, baseY,
+                        "_", rowFg:sub(curX, curX), rowBg:sub(curX, curX), pxW, pxH
+                    )
+                end
+                return
+            end
+        end
 
         for fontRow = 0, GLYPH_H - 1 do
             local colours = {}
