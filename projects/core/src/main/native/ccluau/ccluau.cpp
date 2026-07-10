@@ -24,6 +24,7 @@
 #include <cstring>
 #include <ctime>
 #include <chrono>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -2106,6 +2107,199 @@ static const luaL_Reg GFX_METHODS[] = {
 };
 
 // ---------------------------------------------------------------------------
+// Native textutils.serialize: identical output to the reference Lua
+// implementation (rom/apis/textutils.lua serialize_impl), but built with
+// linear appends rather than quadratic string concatenation. Errors unwind
+// as C++ exceptions (LUA_USE_LONGJMP=0), so the std::string state is safe.
+// ---------------------------------------------------------------------------
+
+static bool serializeIsKeyword(const char* s, size_t len) {
+    static const char* KEYWORDS[] = {
+        "and", "break", "do", "else", "elseif", "end", "false", "for", "function",
+        "if", "in", "local", "nil", "not", "or", "repeat", "return", "then",
+        "true", "until", "while", nullptr,
+    };
+    for (int i = 0; KEYWORDS[i] != nullptr; i++) {
+        if (strlen(KEYWORDS[i]) == len && memcmp(KEYWORDS[i], s, len) == 0) return true;
+    }
+    return false;
+}
+
+static bool serializeIsIdentifier(const char* s, size_t len) {
+    if (len == 0) return false;
+    if (!isalpha((unsigned char) s[0]) && s[0] != '_') return false;
+    for (size_t i = 1; i < len; i++) {
+        if (!isalnum((unsigned char) s[i]) && s[i] != '_') return false;
+    }
+    return !serializeIsKeyword(s, len);
+}
+
+struct SerializeState {
+    lua_State* L;
+    std::string out;
+    bool compact;
+    bool allowRepetitions;
+    // Table pointer -> true while being serialised, false once completed
+    // (matching the tracking table of the Lua implementation).
+    std::map<const void*, bool> tracking;
+    int formatIdx; // Absolute stack index of string.format.
+};
+
+// Serialize the value at the given absolute stack index.
+static void serializeValue(SerializeState& s, int idx, const std::string& indent, int depth) {
+    lua_State* L = s.L;
+    int type = lua_type(L, idx);
+
+    switch (type) {
+    case LUA_TTABLE: {
+        if (depth > 512) luaL_error(L, "Cannot serialize table with recursive entries");
+        luaL_checkstack(L, 6, "table is too deeply nested");
+
+        const void* ptr = lua_topointer(L, idx);
+        auto existing = s.tracking.find(ptr);
+        if (existing != s.tracking.end()) {
+            if (!existing->second) luaL_error(L, "Cannot serialize table with repeated entries");
+            luaL_error(L, "Cannot serialize table with recursive entries");
+        }
+        s.tracking[ptr] = true;
+
+        // Empty tables are simple.
+        lua_pushnil(L);
+        if (lua_next(L, idx) == 0) {
+            s.out += "{}";
+        } else {
+            lua_pop(L, 2);
+
+            std::string subIndent = s.compact ? "" : indent + "  ";
+            const char* open = s.compact ? "{" : "{\n";
+            const char* openKey = s.compact ? "[" : "[ ";
+            const char* closeKey = s.compact ? "]=" : " ] = ";
+            const char* equal = s.compact ? "=" : " = ";
+            const char* comma = s.compact ? "," : ",\n";
+
+            s.out += open;
+
+            // The array part (an ipairs walk ignoring metamethods).
+            long long lastArray = 0;
+            for (long long i = 1; ; i++) {
+                lua_rawgeti(L, idx, (int) i);
+                if (lua_isnil(L, -1)) {
+                    lua_pop(L, 1);
+                    break;
+                }
+                lastArray = i;
+                s.out += subIndent;
+                serializeValue(s, lua_gettop(L), subIndent, depth + 1);
+                s.out += comma;
+                lua_pop(L, 1);
+            }
+
+            // The remaining keys.
+            lua_pushnil(L);
+            while (lua_next(L, idx) != 0) {
+                bool seen = false;
+                if (lua_type(L, -2) == LUA_TNUMBER || lua_type(L, -2) == LUA_TINTEGER) {
+                    double key = lua_tonumber(L, -2);
+                    seen = key == std::floor(key) && key >= 1 && key <= (double) lastArray;
+                }
+                if (!seen) {
+                    s.out += subIndent;
+                    size_t keyLen;
+                    const char* key = lua_type(L, -2) == LUA_TSTRING ? lua_tolstring(L, -2, &keyLen) : nullptr;
+                    if (key != nullptr && serializeIsIdentifier(key, keyLen)) {
+                        s.out.append(key, keyLen);
+                        s.out += equal;
+                        serializeValue(s, lua_gettop(L), subIndent, depth + 1);
+                    } else {
+                        s.out += openKey;
+                        serializeValue(s, lua_gettop(L) - 1, subIndent, depth + 1);
+                        s.out += closeKey;
+                        serializeValue(s, lua_gettop(L), subIndent, depth + 1);
+                    }
+                    s.out += comma;
+                }
+                lua_pop(L, 1);
+            }
+
+            s.out += indent;
+            s.out += "}";
+        }
+
+        if (s.allowRepetitions) {
+            s.tracking.erase(ptr);
+        } else {
+            s.tracking[ptr] = false;
+        }
+        break;
+    }
+
+    case LUA_TSTRING: {
+        // string.format("%q", value): quoting must match the runtime exactly.
+        lua_pushvalue(L, s.formatIdx);
+        lua_pushliteral(L, "%q");
+        lua_pushvalue(L, idx);
+        lua_call(L, 2, 1);
+        size_t len;
+        const char* quoted = lua_tolstring(L, -1, &len);
+        s.out.append(quoted, len);
+        lua_pop(L, 1);
+        break;
+    }
+
+    case LUA_TNUMBER:
+    case LUA_TINTEGER: {
+        double value = lua_tonumber(L, idx);
+        if (value != value) {
+            s.out += "0/0";
+        } else if (value == HUGE_VAL) {
+            s.out += "1/0";
+        } else if (value == -HUGE_VAL) {
+            s.out += "-1/0";
+        } else {
+            lua_pushvalue(L, idx);
+            size_t len;
+            const char* text = lua_tolstring(L, -1, &len);
+            s.out.append(text, len);
+            lua_pop(L, 1);
+        }
+        break;
+    }
+
+    case LUA_TBOOLEAN:
+        s.out += lua_toboolean(L, idx) ? "true" : "false";
+        break;
+
+    case LUA_TNIL:
+        s.out += "nil";
+        break;
+
+    default:
+        luaL_error(L, "Cannot serialize type %s", luaL_typename(L, idx));
+    }
+}
+
+// _CC_NATIVE_TEXTUTILS.serialize(value, compact, allowRepetitions) -> string
+static int textutilsSerialize(lua_State* L) {
+    lua_settop(L, 3);
+
+    SerializeState s{};
+    s.L = L;
+    s.compact = lua_toboolean(L, 2) != 0;
+    s.allowRepetitions = lua_toboolean(L, 3) != 0;
+    s.out.reserve(64);
+
+    lua_getglobal(L, "string");
+    lua_getfield(L, -1, "format");
+    lua_remove(L, -2);
+    s.formatIdx = lua_gettop(L);
+
+    serializeValue(s, 1, "", 0);
+
+    lua_pushlstring(L, s.out.data(), s.out.size());
+    return 1;
+}
+
+// ---------------------------------------------------------------------------
 // Native redstone (redstone/rs API)
 // ---------------------------------------------------------------------------
 static const char* SIDE_NAMES[6] = { "bottom", "top", "back", "front", "right", "left" };
@@ -2470,6 +2664,12 @@ JNIEXPORT jlong JNICALL Java_dan200_computercraft_core_lua_luau_LuauNative_creat
         lua_setfield(L, -2, reg->name);
     }
     lua_setglobal(L, "_CC_NATIVE_GFX");
+
+    // Native textutils fast paths.
+    lua_createtable(L, 0, 1);
+    lua_pushcfunction(L, textutilsSerialize, "textutils.serialize");
+    lua_setfield(L, -2, "serialize");
+    lua_setglobal(L, "_CC_NATIVE_TEXTUTILS");
 
     // Emulate Lua 5.2's _ENV for chunks running in the default environment.
     // Chunks loaded with a custom environment get their own _ENV field (see

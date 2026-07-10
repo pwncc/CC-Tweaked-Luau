@@ -159,6 +159,25 @@ local function gfxWorkload(gfx)
     end
 end
 
+bench("serialize", function()
+    -- A realistic structured payload: 200 records with nested fields.
+    local records = {}
+    for i = 1, 200 do
+        records[i] = {
+            id = i,
+            name = "record-" .. i,
+            position = { x = i * 1.5, y = -i, z = i % 32 },
+            tags = { "alpha", "beta", i % 2 == 0 and "even" or "odd" },
+            ["strange key " .. i] = true,
+        }
+    end
+    local out
+    for _ = 1, 100 do
+        out = textutils.serialize(records)
+    end
+    return #out
+end)
+
 local haveGfx, gfxModule = pcall(require, "mineos.gfx")
 if haveGfx then
     bench("gfx_text", gfxWorkload(gfxModule))
