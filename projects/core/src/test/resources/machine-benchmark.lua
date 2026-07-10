@@ -145,4 +145,31 @@ if _CC_NATIVE_WINDOW then
     end
 end
 
+-- Pixel text rasterisation (the MineOS UI hot path): draw onto a large
+-- offscreen window via mineos.gfx, natively and via the Lua fallback.
+local function gfxWorkload(gfx)
+    return function()
+        local t = term.native and term.native() or term
+        local canvas = gfx.new(window.create(t, 1, 1, 300, 60, false))
+        for i = 1, 2e3 do
+            canvas:rect(1, 1, 300, 60, 2 ^ (i % 16))
+            canvas:text(1, 1, "The quick brown fox jumps over it", 2 ^ (i % 16), colours.black, 2, 1)
+            canvas:text(1, 20, "MineOS pixel user interface text", colours.white, 2 ^ (i % 16), 3, 2)
+        end
+    end
+end
+
+local haveGfx, gfxModule = pcall(require, "mineos.gfx")
+if haveGfx then
+    bench("gfx_text", gfxWorkload(gfxModule))
+
+    if _CC_NATIVE_GFX then
+        local env = setmetatable({ _CC_NATIVE_GFX = false }, { __index = _ENV })
+        local fn = loadfile("rom/modules/main/mineos/gfx.lua", nil, env)
+        if fn then
+            bench("gfx_text_lua", gfxWorkload(fn()))
+        end
+    end
+end
+
 benchmark.finish()

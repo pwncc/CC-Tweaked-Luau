@@ -18,6 +18,14 @@ of 3x2 cells is physically square. Text and icons take per-pixel cell sizes
 
 local FONT = require "mineos.font"
 
+-- On the Luau runtime the hot paths (rectangle fills and font
+-- rasterisation) run natively; the Lua implementations below are the
+-- reference and the fallback for foreign terminal targets.
+local native = _CC_NATIVE_GFX
+if native and not pcall(native.setFont, FONT.data, FONT.width, FONT.height) then
+    native = nil
+end
+
 local HEX = "0123456789abcdef"
 
 local function hexOf(colour)
@@ -45,6 +53,8 @@ end
 --- Fill a rectangle of cells with a colour.
 function canvas:rect(x, y, w, h, colour)
     if w <= 0 or h <= 0 then return end
+    if native and native.fillRect(self.term, x, y, w, h, hexOf(colour)) then return end
+
     local term = self.term
     local text = (" "):rep(w)
     local hex = hexOf(colour):rep(w)
@@ -80,6 +90,11 @@ canvas.textWidth = function(_, str, pxW) return gfx.textWidth(str, pxW) end
 -- @tparam number pxH Cells per font pixel, vertically.
 -- @treturn number The width drawn, in cells.
 function canvas:text(x, y, str, fg, bg, pxW, pxH)
+    if native then
+        local width = native.drawText(self.term, x, y, str, hexOf(fg), hexOf(bg), pxW, pxH)
+        if width then return width end
+    end
+
     local term = self.term
     local data = FONT.data
     local fgHex, bgHex = hexOf(fg), hexOf(bg)
