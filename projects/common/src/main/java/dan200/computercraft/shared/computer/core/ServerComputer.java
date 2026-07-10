@@ -28,6 +28,7 @@ import dan200.computercraft.shared.network.client.ComputerTerminalClientMessage;
 import dan200.computercraft.shared.network.server.ServerNetworking;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.inventory.AbstractContainerMenu;
 import org.jspecify.annotations.Nullable;
@@ -35,6 +36,7 @@ import org.jspecify.annotations.Nullable;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Function;
 
@@ -53,6 +55,20 @@ public class ServerComputer implements ComputerEnvironment {
 
     private final NetworkedTerminal terminal;
     private final AtomicBoolean terminalChanged = new AtomicBoolean(false);
+
+    // The sub-tick terminal sync: terminal changes are pushed to watching
+    // players the moment they happen (rate-limited), rather than waiting for
+    // the next server tick, so screens update at display rather than tick
+    // rate. The watcher set is refreshed once per tick on the server thread;
+    // sends happen from the computer thread, which Netty hands off safely.
+    private static final long FAST_SYNC_INTERVAL_NS = fastSyncInterval();
+    private final ConcurrentHashMap<ServerPlayer, AbstractContainerMenu> terminalWatchers = new ConcurrentHashMap<>();
+    private volatile long lastFastSync;
+
+    private static long fastSyncInterval() {
+        var hz = Integer.getInteger("cc.terminal_sync_hz", 60);
+        return hz <= 0 ? Long.MAX_VALUE : 1_000_000_000L / hz;
+    }
 
     private int ticksSincePing;
 
@@ -106,10 +122,34 @@ public class ServerComputer implements ComputerEnvironment {
 
     protected final void markTerminalChanged() {
         terminalChanged.set(true);
+
+        if (!terminalWatchers.isEmpty()) {
+            var now = System.nanoTime();
+            if (now - lastFastSync >= FAST_SYNC_INTERVAL_NS && terminalChanged.getAndSet(false)) {
+                lastFastSync = now;
+                var state = getTerminalState();
+                terminalWatchers.forEach((player, menu) -> {
+                    if (!player.hasDisconnected()) {
+                        ServerNetworking.sendToPlayer(new ComputerTerminalClientMessage(menu, state), player);
+                    }
+                });
+            }
+        }
     }
 
     protected void tickServer() {
         ticksSincePing++;
+
+        // Refresh the players watching this terminal. Menus opened or closed
+        // mid-tick reach the fast path within a tick; the client discards
+        // updates for menus it no longer has open.
+        terminalWatchers.clear();
+        for (var player : level.getServer().getPlayerList().getPlayers()) {
+            if (player.containerMenu instanceof ComputerMenu menu && menu.getComputer() == this) {
+                terminalWatchers.put(player, player.containerMenu);
+            }
+        }
+
         computer.tick();
         if (terminalChanged.getAndSet(false)) onTerminalChanged();
     }
