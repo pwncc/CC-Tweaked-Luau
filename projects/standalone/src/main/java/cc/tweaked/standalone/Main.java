@@ -28,6 +28,7 @@ import org.lwjgl.opengl.GL;
 import org.lwjgl.opengl.GLUtil;
 import org.lwjgl.system.Checks;
 import org.lwjgl.system.MemoryStack;
+import org.lwjgl.system.MemoryUtil;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -417,6 +418,7 @@ public class Main {
         var lastTickTime = GLFW.glfwGetTime();
         var lastCursorBlink = false;
         var cursorCaptured = false;
+        ByteBuffer termContents = null;
         while (!glfwWindowShouldClose(window)) {
             var now = GLFW.glfwGetTime();
             if (now - lastTickTime >= 0.05) {
@@ -445,11 +447,16 @@ public class Main {
                     }, GL_STATIC_DRAW);
                 }
 
-                try (var stack = MemoryStack.stackPush()) {
-                    var buffer = stack.malloc(terminal.getWidth() * terminal.getHeight() * 3);
-                    writeTerminalContents(buffer, terminal);
-                    glNamedBufferData(termBuffer, buffer, GL_STATIC_DRAW);
+                // High-resolution terminals are far too large for the (64KB) MemoryStack, so the
+                // upload buffer lives on the heap and is grown as needed.
+                var contentsSize = terminal.getWidth() * terminal.getHeight() * 3;
+                if (termContents == null || termContents.capacity() < contentsSize) {
+                    if (termContents != null) MemoryUtil.memFree(termContents);
+                    termContents = MemoryUtil.memAlloc(contentsSize);
                 }
+                termContents.clear();
+                writeTerminalContents(termContents, terminal);
+                glNamedBufferData(termBuffer, termContents, GL_STATIC_DRAW);
 
                 try (var stack = MemoryStack.stackPush()) {
                     var buffer = stack.malloc(TERMINAL_DATA_SIZE);
@@ -489,6 +496,8 @@ public class Main {
             // latency and idle CPU usage.
             GLFW.glfwWaitEventsTimeout(0.005);
         }
+
+        if (termContents != null) MemoryUtil.memFree(termContents);
     }
 
     private static int compileProgram(GLObjects gl) throws IOException {
