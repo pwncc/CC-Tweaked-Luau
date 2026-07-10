@@ -81,6 +81,226 @@ do
     expect = f().expect
 end
 
+-- On the Luau runtime, wrap file handles with a Lua-side buffer: reads pull
+-- 64KB from Java at a time and lines are sliced out of the buffer, writes
+-- accumulate until 64KB. Line-by-line IO thus no longer crosses the runtime
+-- boundary on every call. The semantics (including the readLine \r\n rules
+-- and error messages) match the Java handles exactly; unusual argument types
+-- are delegated to the underlying handle so errors stay identical.
+if _CC_NATIVE_WINDOW then
+    local native_open = fs.open
+    local CHUNK = 64 * 1024
+
+    local function closedError()
+        error("attempt to use a closed file", 0)
+    end
+
+    local function wrapRead(handle, binary)
+        local buffer, pos, eof, closed = "", 1, false, false
+
+        local function buffered() return #buffer - pos + 1 end
+
+        local function fill()
+            if eof then return false end
+            local chunk = handle.read(CHUNK)
+            if chunk == nil or #chunk == 0 then
+                eof = true
+                return false
+            end
+            if pos > 1 then
+                buffer = buffer:sub(pos)
+                pos = 1
+            end
+            buffer = buffer == "" and chunk or buffer .. chunk
+            return true
+        end
+
+        local out = {}
+
+        function out.readLine(withTrailing)
+            if closed then closedError() end
+            if withTrailing ~= nil and type(withTrailing) ~= "boolean" then
+                error(("bad argument #1 (boolean expected, got %s)"):format(type(withTrailing)), 0)
+            end
+            while true do
+                local nl = buffer:find("\n", pos, true)
+                if nl then
+                    local line
+                    if withTrailing then
+                        line = buffer:sub(pos, nl)
+                    else
+                        line = buffer:sub(pos, nl - 1)
+                        if line:sub(-1) == "\r" then line = line:sub(1, -2) end
+                    end
+                    pos = nl + 1
+                    return line
+                end
+                if not fill() then
+                    -- End of file: return the remainder (unstripped), or nil.
+                    if buffered() > 0 then
+                        local line = buffer:sub(pos)
+                        pos = #buffer + 1
+                        return line
+                    end
+                    return nil
+                end
+            end
+        end
+
+        function out.readAll()
+            if closed then closedError() end
+            local before = buffer:sub(pos)
+            buffer, pos, eof = "", 1, true
+            local rest = handle.readAll()
+            if rest == nil then
+                if before == "" then return nil end
+                return before
+            end
+            return before .. rest
+        end
+
+        function out.read(count)
+            if closed then closedError() end
+            if count == nil then
+                if binary then
+                    if buffered() == 0 and not fill() then return nil end
+                    local value = buffer:byte(pos)
+                    pos = pos + 1
+                    return value
+                end
+                count = 1
+            end
+            if type(count) ~= "number" then
+                error(("bad argument #1 (number expected, got %s)"):format(type(count)), 0)
+            end
+            count = count >= 0 and math.floor(count) or math.ceil(count)
+            if count < 0 then error("Cannot read a negative number of bytes", 0) end
+            if count == 0 then
+                if buffered() > 0 then return "" end
+                return handle.read(0)
+            end
+            while buffered() < count do
+                if not fill() then break end
+            end
+            local available = buffered()
+            if available == 0 then return nil end
+            local n = count < available and count or available
+            local result = buffer:sub(pos, pos + n - 1)
+            pos = pos + n
+            return result
+        end
+
+        function out.seek(whence, offset)
+            if closed then closedError() end
+            if whence ~= nil and type(whence) ~= "string" then
+                error(("bad argument #1 (string expected, got %s)"):format(type(whence)), 0)
+            end
+            local result, err
+            if whence == nil or whence == "cur" then
+                -- The underlying position is ahead of the logical one by
+                -- however much is still buffered.
+                local base, baseErr = handle.seek("cur", 0)
+                if not base then return base, baseErr end
+                result, err = handle.seek("set", base - buffered() + (offset or 0))
+            else
+                result, err = handle.seek(whence, offset)
+            end
+            -- Only a successful seek invalidates the buffer.
+            if result then buffer, pos, eof = "", 1, false end
+            return result, err
+        end
+
+        function out.close()
+            if closed then closedError() end
+            handle.close()
+            closed = true
+            buffer, pos = "", 1
+        end
+
+        return out
+    end
+
+    local function wrapWrite(handle, binary)
+        local parts, size, closed = {}, 0, false
+
+        local function flushBuffer()
+            if size == 0 then return end
+            local data = table.concat(parts)
+            parts, size = {}, 0
+            handle.write(data)
+        end
+
+        local out = {}
+
+        function out.write(value)
+            if closed then closedError() end
+            local kind = type(value)
+            if kind == "string" then
+                parts[#parts + 1] = value
+                size = size + #value
+            elseif kind == "number" then
+                if binary then
+                    local n = value >= 0 and math.floor(value) or math.ceil(value)
+                    parts[#parts + 1] = string.char(n % 256)
+                    size = size + 1
+                else
+                    local text = tostring(value)
+                    parts[#parts + 1] = text
+                    size = size + #text
+                end
+            else
+                -- Let the underlying handle produce the exact error.
+                flushBuffer()
+                return handle.write(value)
+            end
+            if size >= CHUNK then flushBuffer() end
+        end
+
+        function out.writeLine(value)
+            if closed then closedError() end
+            local kind = type(value)
+            if kind == "string" or kind == "number" then
+                out.write(value)
+                out.write("\n")
+            else
+                flushBuffer()
+                return handle.writeLine(value)
+            end
+        end
+
+        function out.flush()
+            if closed then closedError() end
+            flushBuffer()
+            return handle.flush()
+        end
+
+        function out.seek(whence, offset)
+            if closed then closedError() end
+            flushBuffer()
+            return handle.seek(whence, offset)
+        end
+
+        function out.close()
+            if closed then closedError() end
+            flushBuffer()
+            handle.close()
+            closed = true
+        end
+
+        return out
+    end
+
+    function fs.open(path, mode)
+        local handle, err = native_open(path, mode)
+        if not handle then return handle, err end
+        if mode == "r" then return wrapRead(handle, false) end
+        if mode == "rb" then return wrapRead(handle, true) end
+        if mode == "w" or mode == "a" then return wrapWrite(handle, false) end
+        if mode == "wb" or mode == "ab" then return wrapWrite(handle, true) end
+        return handle
+    end
+end
+
 -- Inject a stub for the old bit library
 _G.bit = {
     bnot = bit32.bnot,
