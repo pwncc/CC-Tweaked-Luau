@@ -270,5 +270,19 @@ modPublishing {
     output = tasks.jar
 }
 
+// On 1.21.x this project builds against NeoForge, but the project (and so the jar) is still named
+// "forge" for historical reasons. Publish a neoforge-named copy of the release jar so users grab
+// the right file.
+val neoforgeJar by tasks.registering(Copy::class) {
+    group = LifecycleBasePlugin.BUILD_GROUP
+    description = "Copies the release jar under a neoforge name."
+
+    from(tasks.jar.map { it.archiveFile })
+    into(layout.buildDirectory.dir("libs"))
+    rename { it.replace("-forge-", "-neoforge-") }
+}
+
+tasks.assemble { dependsOn(neoforgeJar) }
+
 // TODO: Remove once https://github.com/modrinth/minotaur/pull/72 is merged.
 modrinth { loaders = listOf("neoforge") }
