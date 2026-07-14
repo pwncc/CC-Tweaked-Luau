@@ -251,5 +251,20 @@ modPublishing {
     output = tasks.reobfJar
 }
 
+// NeoForge 47.1.x (Minecraft 1.20.1) is a binary-compatible fork of Forge 47, using the same
+// net.minecraftforge namespace, "forge" mod id and SRG obfuscation, so the Forge jar runs on it
+// unchanged. Publish a neoforge-named copy of the release jar rather than maintaining a separate
+// loader project.
+val neoforgeJar by tasks.registering(Copy::class) {
+    group = LifecycleBasePlugin.BUILD_GROUP
+    description = "Copies the release jar under a neoforge name, for NeoForge 1.20.1 users."
+
+    from(tasks.reobfJar.map { it.archiveFile })
+    into(layout.buildDirectory.dir("libs"))
+    rename { it.replace("-forge-", "-neoforge-") }
+}
+
+tasks.assemble { dependsOn(neoforgeJar) }
+
 // TODO: Remove once https://github.com/modrinth/minotaur/pull/72 is merged.
 modrinth { loaders = listOf("forge") }
