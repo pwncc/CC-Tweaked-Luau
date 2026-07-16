@@ -251,7 +251,7 @@ cct.jacoco(runGametestClient)
 
 val runGametestClientWithIris by tasks.registering(ClientJavaExec::class) {
     description = "Runs client-side gametests with Iris"
-    copyFromForge("runGameTestClient")
+    copyFromForge("runTestClient")
 
     tags("iris")
     classpath += configurations["testWithIris"]

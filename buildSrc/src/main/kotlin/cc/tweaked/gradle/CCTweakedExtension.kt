@@ -196,11 +196,14 @@ abstract class CCTweakedExtension(private val project: Project) {
      */
     fun downloadFile(label: String, url: String): File {
         val uri = URI(url)
-        val path = File(uri.path)
+        // Split the URL path with string operations: File.parent would use backslashes on Windows,
+        // producing an invalid URI.
+        val fileName = uri.path.substringAfterLast('/')
+        val parentPath = uri.path.substringBeforeLast('/')
 
         project.repositories.ivy {
             name = label
-            setUrl(URI(uri.scheme, uri.userInfo, uri.host, uri.port, path.parent, null, null))
+            setUrl(URI(uri.scheme, uri.userInfo, uri.host, uri.port, parentPath, null, null))
             patternLayout {
                 artifact("[artifact].[ext]")
             }
@@ -208,7 +211,7 @@ abstract class CCTweakedExtension(private val project: Project) {
                 artifact()
             }
             content {
-                includeModule("cc.tweaked.internal", path.nameWithoutExtension)
+                includeModule("cc.tweaked.internal", fileName.substringBeforeLast('.'))
             }
         }
 
@@ -216,8 +219,8 @@ abstract class CCTweakedExtension(private val project: Project) {
             project.dependencies.create(
                 mapOf(
                     "group" to "cc.tweaked.internal",
-                    "name" to path.nameWithoutExtension,
-                    "ext" to path.extension,
+                    "name" to fileName.substringBeforeLast('.'),
+                    "ext" to fileName.substringAfterLast('.'),
                 ),
             ),
         ).resolve().single()
