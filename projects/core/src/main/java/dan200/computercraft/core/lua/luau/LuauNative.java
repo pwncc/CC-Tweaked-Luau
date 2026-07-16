@@ -12,6 +12,10 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.Arrays;
+import java.util.HexFormat;
 import java.util.Locale;
 
 /**
@@ -75,13 +79,49 @@ final class LuauNative {
         var url = LuauNative.class.getClassLoader().getResource(resource);
         if (url == null) throw new IOException("No such resource " + resource);
 
-        // System.load requires an on-disk path, so extract the library to a temporary file.
-        var temp = Files.createTempFile("ccluau", libraryName());
-        temp.toFile().deleteOnExit();
+        byte[] library;
         try (var stream = url.openStream()) {
-            Files.copy(stream, temp, StandardCopyOption.REPLACE_EXISTING);
+            library = stream.readAllBytes();
         }
-        System.load(temp.toAbsolutePath().toString());
+
+        // System.load requires an on-disk path, so extract to a stable content-addressed cache.
+        // A loaded DLL cannot be deleted on Windows, so a fresh temporary file would leak one copy
+        // per launch; reusing one file per library version also avoids re-triggering virus
+        // scanners with a brand-new executable on every run.
+        var cacheRoot = Path.of(System.getProperty("cc.luau.cache", System.getProperty("java.io.tmpdir")));
+        var target = cacheRoot.resolve("ccluau").resolve(hash(library)).resolve(libraryName());
+        if (!isCached(target, library)) extract(target, library);
+        System.load(target.toAbsolutePath().toString());
+    }
+
+    private static boolean isCached(Path target, byte[] library) throws IOException {
+        return Files.exists(target) && Arrays.equals(Files.readAllBytes(target), library);
+    }
+
+    private static void extract(Path target, byte[] library) throws IOException {
+        Files.createDirectories(target.getParent());
+        var temp = Files.createTempFile(target.getParent(), "extract", ".tmp");
+        try {
+            Files.write(temp, library);
+            try {
+                Files.move(temp, target, StandardCopyOption.ATOMIC_MOVE);
+            } catch (IOException e) {
+                // Another process may have extracted (and locked) the library while we were
+                // writing. If the target now has the right contents, use it.
+                if (!isCached(target, library)) throw e;
+            }
+        } finally {
+            Files.deleteIfExists(temp);
+        }
+    }
+
+    private static String hash(byte[] contents) {
+        try {
+            var digest = MessageDigest.getInstance("SHA-256").digest(contents);
+            return HexFormat.of().formatHex(digest, 0, 8);
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("JVM does not provide SHA-256", e);
+        }
     }
 
     private static String platform() {
