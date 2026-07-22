@@ -40,6 +40,13 @@ java {
 repositories {
     mavenCentral()
 
+    maven("https://maven.neoforged.net/releases") {
+        name = "NeoForged"
+        content {
+            includeGroup("net.neoforged")
+        }
+    }
+
     val mainMaven = maven("https://maven.squiddev.cc/mirror") {
         name = "SquidDev"
     }
