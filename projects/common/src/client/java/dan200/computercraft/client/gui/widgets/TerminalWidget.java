@@ -64,9 +64,25 @@ public class TerminalWidget extends AbstractWidget {
     public static final float SCREEN_SCALE = 1.25f;
 
     public TerminalWidget(Terminal terminal, UserComputerInput computerInput, ClientComputerActions computerActions, int x, int y) {
+        this(terminal, computerInput, computerActions, x, y, SCREEN_SCALE);
+    }
+
+    /**
+     * Construct a terminal widget with an explicit screen scale.
+     *
+     * @param terminal        The terminal to display.
+     * @param computerInput   The computer to send input events to.
+     * @param computerActions The computer to dispatch shortcuts (terminate/shutdown/reboot) to.
+     * @param x               The x position of the widget.
+     * @param y               The y position of the widget.
+     * @param screenScale     How much to enlarge the widget beyond the terminal's base cell dimensions. Screens with
+     *                        a fixed-size background texture (i.e. turtles) pass 1, as their layout cannot absorb a
+     *                        larger terminal.
+     */
+    public TerminalWidget(Terminal terminal, UserComputerInput computerInput, ClientComputerActions computerActions, int x, int y, float screenScale) {
         // The widget's footprint comes from the terminal's *base* size: a terminal resized by
         // term.setResolution renders more (smaller) characters in the same space.
-        super(x, y, getWidth(terminal.getBaseWidth()), getHeight(terminal.getBaseHeight()), DESCRIPTION);
+        super(x, y, getWidth(terminal.getBaseWidth(), screenScale), getHeight(terminal.getBaseHeight(), screenScale), DESCRIPTION);
 
         this.terminal = terminal;
         this.computerInput = computerInput;
@@ -74,13 +90,15 @@ public class TerminalWidget extends AbstractWidget {
 
         innerX = x + MARGIN;
         innerY = y + MARGIN;
-        innerWidth = Math.round(terminal.getBaseWidth() * FONT_WIDTH * SCREEN_SCALE);
-        innerHeight = Math.round(terminal.getBaseHeight() * FONT_HEIGHT * SCREEN_SCALE);
+        innerWidth = Math.round(terminal.getBaseWidth() * FONT_WIDTH * screenScale);
+        innerHeight = Math.round(terminal.getBaseHeight() * FONT_HEIGHT * screenScale);
     }
 
     /**
      * The horizontal render scale. The widget always occupies its original footprint: if the terminal is resized
      * mid-session (e.g. {@code term.setResolution}), we render more (smaller) characters in the same space.
+     *
+     * @return The scale to render each character at.
      */
     private float scaleX() {
         var pixels = terminal.getWidth() * FONT_WIDTH;
@@ -300,10 +318,18 @@ public class TerminalWidget extends AbstractWidget {
     }
 
     public static int getWidth(int termWidth) {
-        return Math.round(termWidth * FONT_WIDTH * SCREEN_SCALE) + MARGIN * 2;
+        return getWidth(termWidth, SCREEN_SCALE);
     }
 
     public static int getHeight(int termHeight) {
-        return Math.round(termHeight * FONT_HEIGHT * SCREEN_SCALE) + MARGIN * 2;
+        return getHeight(termHeight, SCREEN_SCALE);
+    }
+
+    public static int getWidth(int termWidth, float screenScale) {
+        return Math.round(termWidth * FONT_WIDTH * screenScale) + MARGIN * 2;
+    }
+
+    public static int getHeight(int termHeight, float screenScale) {
+        return Math.round(termHeight * FONT_HEIGHT * screenScale) + MARGIN * 2;
     }
 }

@@ -42,9 +42,11 @@ public class TurtleScreen extends AbstractComputerScreen<TurtleMenu> {
 
     @Override
     protected TerminalWidget createTerminal() {
+        // The turtle GUI is a fixed-size texture, so the terminal keeps its unscaled footprint: a larger widget
+        // would overlap the inventory. High-resolution terminals are still rendered, scaled into the same space.
         return new TerminalWidget(
             terminalData, computerInput, computerActions,
-            leftPos + BORDER + AbstractComputerMenu.SIDEBAR_WIDTH, topPos + BORDER
+            leftPos + BORDER + AbstractComputerMenu.SIDEBAR_WIDTH, topPos + BORDER, 1
         );
     }
 
