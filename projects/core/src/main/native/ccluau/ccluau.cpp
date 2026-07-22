@@ -624,6 +624,14 @@ static int handleResponse(lua_State* L, Reader& r) {
         int count = decodeAll(L, r);
         if (count < 0) luaL_error(L, "ccluau: malformed response payload");
         if (status == INVOKE_RETURN) return count;
+
+        // Drop everything below the yield values (typically the method's own
+        // arguments) before suspending: lua_yield protects the slots below it,
+        // and on resume javaContinuation encodes the whole stack as the
+        // resumption arguments, so anything left here would be prepended to
+        // the event arguments passed to ILuaCallback.resume.
+        int extra = lua_gettop(L) - count;
+        for (int i = 0; i < extra; i++) lua_remove(L, 1);
         return lua_yield(L, count);
     }
     default:
