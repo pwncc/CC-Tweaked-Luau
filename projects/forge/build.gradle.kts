@@ -203,10 +203,10 @@ dependencies {
 
 tasks.processResources {
     inputs.property("modVersion", modVersion)
-    inputs.property("neoVersion", libs.versions.neoForge)
+    inputs.property("neoVersion", libs.versions.neoForgeFloor)
 
     var props = mapOf(
-        "neoVersion" to libs.versions.neoForge.get(),
+        "neoVersion" to libs.versions.neoForgeFloor.get(),
         "file" to mapOf("jarVersion" to modVersion),
     )
 

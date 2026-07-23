@@ -10,6 +10,9 @@
 fabric-api = "0.116.12+1.21.1"
 fabric-loader = "0.18.4"
 neoForge = "21.1.242"
+# The oldest NeoForge release we support (and so declare in neoforge.mods.toml). This is looser
+# than the version we build against: NeoForge keeps binary compatibility within the 21.1 line.
+neoForgeFloor = "21.1.9"
 neoMergeTool = "2.0.0"
 mixin = "0.8.5"
 parchment = "2024.07.28"
