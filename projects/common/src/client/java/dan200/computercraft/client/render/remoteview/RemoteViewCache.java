@@ -366,19 +366,16 @@ public final class RemoteViewCache {
         }
 
         /**
-         * The camera's structure-local eye position, when it rides a physics structure whose pose is currently
-         * synced to this client. Transforming the camera's structure-local pose through the structure's own
-         * client-side (interpolated) pose every frame glues the view to the structure exactly as Sable draws it -
-         * the server-streamed world pose runs on a different timeline (server ticks vs snapshot interpolation)
-         * and would lag or lead a fast mover.
+         * The <em>render-time</em> pose of the physics structure this camera rides, when the structure is synced
+         * to this client. Transforming the camera's structure-local pose through this every frame glues the view
+         * to the structure exactly as Sable draws it - both the server-streamed world pose and the structure's
+         * logical (snapshot) pose run on other timelines, and would lag or lead a fast mover.
          *
-         * @return The structure-local eye position, or {@code null} when not applicable.
+         * @return The structure's render pose, or {@code null} when not applicable.
          */
-        private @Nullable Vec3 clientStructureLocal() {
+        private dev.ryanhcode.sable.companion.math.@Nullable Pose3dc clientStructurePose() {
             var local = config.localPos().orElse(null);
-            if (local == null) return null;
-            var level = Minecraft.getInstance().level;
-            return level != null && dan200.computercraft.shared.camera.SableSupport.poseAt(level, local) != null ? local : null;
+            return local == null ? null : dan200.computercraft.shared.camera.SableSupport.clientRenderPoseAt(local);
         }
 
         /**
@@ -387,9 +384,10 @@ public final class RemoteViewCache {
          * @return The current eye position.
          */
         public Vec3 posePosition() {
-            var local = clientStructureLocal();
+            var local = config.localPos().orElse(null);
             if (local != null) {
-                return dan200.computercraft.shared.camera.SableSupport.toWorldPosition(Minecraft.getInstance().level, local);
+                var pose = clientStructurePose();
+                if (pose != null) return dan200.computercraft.shared.camera.SableSupport.worldPosition(pose, local);
             }
             return posePosition(System.nanoTime());
         }
@@ -404,9 +402,9 @@ public final class RemoteViewCache {
          * @return The current yaw, in degrees.
          */
         public float poseYaw() {
-            var local = clientStructureLocal();
-            if (local != null) {
-                return dan200.computercraft.shared.camera.SableSupport.toWorldYaw(Minecraft.getInstance().level, local, config.localYaw(), config.localPitch());
+            var pose = clientStructurePose();
+            if (pose != null) {
+                return dan200.computercraft.shared.camera.SableSupport.worldYaw(pose, config.localYaw(), config.localPitch());
             }
             return poseYaw(System.nanoTime());
         }
@@ -421,9 +419,9 @@ public final class RemoteViewCache {
          * @return The current pitch, in degrees.
          */
         public float posePitch() {
-            var local = clientStructureLocal();
-            if (local != null) {
-                return dan200.computercraft.shared.camera.SableSupport.toWorldPitch(Minecraft.getInstance().level, local, config.localYaw(), config.localPitch());
+            var pose = clientStructurePose();
+            if (pose != null) {
+                return dan200.computercraft.shared.camera.SableSupport.worldPitch(pose, config.localYaw(), config.localPitch());
             }
             return posePitch(System.nanoTime());
         }
@@ -438,9 +436,9 @@ public final class RemoteViewCache {
          * @return The current roll, in degrees.
          */
         public float poseRoll() {
-            var local = clientStructureLocal();
-            if (local != null) {
-                return dan200.computercraft.shared.camera.SableSupport.toWorldRoll(Minecraft.getInstance().level, local, config.localYaw(), config.localPitch());
+            var pose = clientStructurePose();
+            if (pose != null) {
+                return dan200.computercraft.shared.camera.SableSupport.worldRoll(pose, config.localYaw(), config.localPitch());
             }
             return poseRoll(System.nanoTime());
         }

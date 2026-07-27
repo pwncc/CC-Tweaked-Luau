@@ -203,6 +203,10 @@ public class MonitorBlockEntityRenderer implements BlockEntityRenderer<MonitorBl
      */
     private static void drawViewQuad(PoseStack transform, MultiBufferSource bufferSource, net.minecraft.resources.ResourceLocation texture, float xSize, float ySize) {
         transform.pushPose();
+        // Push off the block face: the content plane sits exactly on the model's screen face, and unlike the
+        // terminal (whose render type applies polygon offset) a plain textured quad would z-fight it - visible
+        // as flickering bands across multiblock monitors.
+        transform.translate(0, 0, 0.002f);
         // Flip into the same y-down frame terminal quads are emitted in, so our quad faces outwards.
         transform.scale(1, -1, 1);
         var left = -MARGIN;

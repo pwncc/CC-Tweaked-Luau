@@ -37,6 +37,20 @@ public final class SableSupport {
     }
 
     /**
+     * The <em>render-time</em> pose of the physics structure containing a position on this client, if any. This
+     * is the interpolated pose the structure is actually drawn with each frame - a camera glued to a structure
+     * must use it, or the view lags (or leads) the structure at speed: the logical pose runs on the snapshot
+     * timeline, several frames apart from what is on screen.
+     *
+     * @param position The (structure-local) position to look up.
+     * @return The structure's render pose, or {@code null} when the position is not inside a tracked structure.
+     */
+    public static @Nullable Pose3dc clientRenderPoseAt(Vec3 position) {
+        var subLevel = SableCompanion.INSTANCE.getContainingClient(position);
+        return subLevel == null ? null : subLevel.renderPose();
+    }
+
+    /**
      * Transform a structure-local position to world space.
      *
      * @param level The level the position is in.
@@ -46,6 +60,17 @@ public final class SableSupport {
     public static Vec3 toWorldPosition(@Nullable Level level, Vec3 local) {
         var pose = poseAt(level, local);
         return pose == null ? local : pose.transformPosition(local);
+    }
+
+    /**
+     * Transform a structure-local position to world space through a known pose.
+     *
+     * @param pose  The structure's pose.
+     * @param local The local position.
+     * @return The world-space position.
+     */
+    public static Vec3 worldPosition(Pose3dc pose, Vec3 local) {
+        return pose.transformPosition(local);
     }
 
     /**
@@ -60,6 +85,18 @@ public final class SableSupport {
     public static float toWorldYaw(@Nullable Level level, Vec3 local, float yaw, float pitch) {
         var pose = poseAt(level, local);
         if (pose == null) return yaw;
+        return worldYaw(pose, yaw, pitch);
+    }
+
+    /**
+     * Transform a structure-local view rotation to a world-space yaw through a known pose.
+     *
+     * @param pose  The structure's pose.
+     * @param yaw   The local yaw, in degrees.
+     * @param pitch The local pitch, in degrees.
+     * @return The world-space yaw, in degrees.
+     */
+    public static float worldYaw(Pose3dc pose, float yaw, float pitch) {
         var forward = pose.transformNormal(Vec3.directionFromRotation(pitch, yaw));
         return (float) Math.toDegrees(Mth.atan2(-forward.x, forward.z));
     }
@@ -76,6 +113,18 @@ public final class SableSupport {
     public static float toWorldPitch(@Nullable Level level, Vec3 local, float yaw, float pitch) {
         var pose = poseAt(level, local);
         if (pose == null) return pitch;
+        return worldPitch(pose, yaw, pitch);
+    }
+
+    /**
+     * Transform a structure-local view rotation to a world-space pitch through a known pose.
+     *
+     * @param pose  The structure's pose.
+     * @param yaw   The local yaw, in degrees.
+     * @param pitch The local pitch, in degrees.
+     * @return The world-space pitch, in degrees.
+     */
+    public static float worldPitch(Pose3dc pose, float yaw, float pitch) {
         var forward = pose.transformNormal(Vec3.directionFromRotation(pitch, yaw));
         var length = forward.length();
         return length < 1e-7 ? pitch : (float) -Math.toDegrees(Math.asin(Mth.clamp(forward.y / length, -1, 1)));
@@ -95,7 +144,19 @@ public final class SableSupport {
     public static float toWorldRoll(@Nullable Level level, Vec3 local, float yaw, float pitch) {
         var pose = poseAt(level, local);
         if (pose == null) return 0;
+        return worldRoll(pose, yaw, pitch);
+    }
 
+    /**
+     * The world-space roll of a structure-local view through a known pose; see
+     * {@link #toWorldRoll(Level, Vec3, float, float)}.
+     *
+     * @param pose  The structure's pose.
+     * @param yaw   The local yaw, in degrees.
+     * @param pitch The local pitch, in degrees.
+     * @return The world-space roll, in degrees.
+     */
+    public static float worldRoll(Pose3dc pose, float yaw, float pitch) {
         var forward = pose.transformNormal(Vec3.directionFromRotation(pitch, yaw));
         var length = forward.length();
         if (length < 1e-7) return 0;
