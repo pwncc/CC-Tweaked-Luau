@@ -1,0 +1,16 @@
+# SPDX-FileCopyrightText: 2026 The CC: Tweaked Developers
+#
+# SPDX-License-Identifier: MPL-2.0
+#
+# Linker version script for the Linux build. -fvisibility=hidden hides Luau's
+# own symbols, but statically linking libstdc++/libgcc pulls in their objects
+# with default visibility, which would re-export __cxa_*, __gxx_personality_v0
+# and friends. Those would then interpose on the JVM's (or another native
+# library's) C++ runtime. Export only the JNI entry points.
+
+{
+    global:
+        Java_dan200_computercraft_core_lua_luau_LuauNative_*;
+    local:
+        *;
+};

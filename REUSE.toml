@@ -90,6 +90,14 @@ SPDX-License-Identifier = "MPL-2.0"
 path = "projects/common/src/main/resources/assets/computercraft/lang/**"
 
 [[annotations]]
+# Prebuilt ccluau libraries: the vendored Luau VM and compiler linked against
+# our JNI bridge. A binary cannot carry an SPDX header, so it is annotated here.
+# Rebuild with tools/build-natives.ps1 (Windows) or tools/build-natives.sh (Linux).
+path = "projects/core/src/main/resources/lib/ccluau/**"
+SPDX-FileCopyrightText = "2019 Roblox Corporation, 2026 The CC: Tweaked Developers"
+SPDX-License-Identifier = "MIT AND MPL-2.0"
+
+[[annotations]]
 path = ["gradle/wrapper/**"]
 SPDX-FileCopyrightText = "Gradle Inc"
 SPDX-License-Identifier = "Apache-2.0"

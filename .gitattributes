@@ -16,6 +16,15 @@ projects/common/src/testMod/resources/data/cctest/structures/* linguist-generate
 *.md     eol=lf diff=markdown
 *.txt    eol=lf
 
+# Shell scripts must keep LF even when checked out on Windows: the native build
+# scripts are run under WSL/Docker, where CRLF breaks the interpreter line.
+*.sh eol=lf
+
+# Likewise the linker version script, which is fed to GNU ld by that build.
+projects/core/src/main/native/**/*.map eol=lf
+
 *.png binary
 *.jar binary
+*.dll binary
+*.so  binary
 *.dfpwm binary
