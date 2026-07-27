@@ -10,6 +10,7 @@ import dan200.computercraft.shared.camera.CameraChunkLoader;
 import dan200.computercraft.shared.camera.CameraHolder;
 import dan200.computercraft.shared.camera.SableSupport;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.GlobalPos;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.server.level.ServerLevel;
@@ -42,6 +43,14 @@ public final class CameraBlockEntity extends BlockEntity implements CameraHolder
     private float pitch = 0;
     private float fov = 70;
 
+    /**
+     * Where this camera's chunk loader is armed. Cameras riding physics structures move - most drastically when
+     * the structure warps between dimensions (e.g. falling back from space) and this block entity is recreated
+     * somewhere new. The loader follows along in {@link #serverTick()}, or the camera would stop ticking (and
+     * broadcasting) as soon as its new home unloads.
+     */
+    private @Nullable GlobalPos loaderPos;
+
     public CameraBlockEntity(BlockEntityType<CameraBlockEntity> type, BlockPos pos, BlockState state) {
         super(type, pos, state);
     }
@@ -52,6 +61,12 @@ public final class CameraBlockEntity extends BlockEntity implements CameraHolder
 
     void serverTick() {
         if (channel != NO_CHANNEL && getLevel() instanceof ServerLevel level) {
+            var here = GlobalPos.of(level.dimension(), getBlockPos().immutable());
+            if (!here.equals(loaderPos)) {
+                if (loaderPos != null) CameraChunkLoader.remove(level.getServer(), loaderPos);
+                CameraChunkLoader.add(level, getBlockPos());
+                loaderPos = here;
+            }
             BroadcastChannels.get(level.getServer()).updateCamera(channel, this);
         }
     }
@@ -69,9 +84,12 @@ public final class CameraBlockEntity extends BlockEntity implements CameraHolder
     }
 
     private void stopBroadcast() {
-        if (channel != NO_CHANNEL && getLevel() instanceof ServerLevel level) {
-            BroadcastChannels.get(level.getServer()).removeCamera(channel, this);
-            CameraChunkLoader.remove(level, getBlockPos());
+        if (getLevel() instanceof ServerLevel level) {
+            if (channel != NO_CHANNEL) BroadcastChannels.get(level.getServer()).removeCamera(channel, this);
+            if (loaderPos != null) {
+                CameraChunkLoader.remove(level.getServer(), loaderPos);
+                loaderPos = null;
+            }
         }
     }
 
@@ -86,9 +104,7 @@ public final class CameraBlockEntity extends BlockEntity implements CameraHolder
         stopBroadcast();
         this.channel = channel;
         setChanged();
-        if (channel != NO_CHANNEL && getLevel() instanceof ServerLevel level) {
-            CameraChunkLoader.add(level, getBlockPos());
-        }
+        // The chunk loader is (re-)armed by the next serverTick, which tracks the camera as it moves.
     }
 
     @Override
