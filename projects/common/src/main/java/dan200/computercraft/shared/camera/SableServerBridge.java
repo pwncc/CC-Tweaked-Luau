@@ -6,15 +6,22 @@ package dan200.computercraft.shared.camera;
 
 import com.mojang.serialization.Codec;
 import dev.ryanhcode.sable.companion.SableCompanion;
+import dev.ryanhcode.sable.companion.math.BoundingBox3ic;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.util.Unit;
+import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.phys.Vec3;
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.lang.reflect.Method;
+import java.lang.reflect.Proxy;
+import java.util.Collections;
+import java.util.Set;
 import java.util.UUID;
+import java.util.WeakHashMap;
 
 /**
  * Optional server-side glue for Sable's physics structures: force-load tickets.
@@ -82,10 +89,87 @@ final class SableServerBridge {
             if (changed && add) LOG.info("[camera] Force-loading structure {} while channel {} is watched", structure, channel);
             if (changed && !add) LOG.info("[camera] Released the force-load on structure {} (channel {})", structure, channel);
             return changed;
+        } catch (ClassNotFoundException e) {
+            broken = true;
+            return false;
         } catch (ReflectiveOperationException | RuntimeException e) {
             broken = true;
             LOG.warn("[camera] Could not manage Sable force-load tickets; fast structures may freeze when unwatched players unload them", e);
             return false;
+        }
+    }
+
+    private static final Set<Object> observedContainers = Collections.newSetFromMap(new WeakHashMap<>());
+
+    /**
+     * Watch a level for newly added physics structures, and briefly force their plot chunks to tick.
+     * <p>
+     * A structure that arrives without players nearby - most importantly one recreated by a dimension warp - has
+     * its plot chunks written but never ticking, so a camera aboard never gets a tick to adopt its channel, re-arm
+     * its chunk loader or re-ticket the new structure: the broadcast dies in a bootstrap deadlock. A short ticking
+     * ticket over the plot breaks it; the camera's own machinery takes over from the first tick.
+     *
+     * @param level The level to watch.
+     */
+    static void watchForNewStructures(ServerLevel level) {
+        if (broken) return;
+        try {
+            if (ticketType == null) resolve();
+            var getContainer = SableServerBridge.getContainer;
+            if (getContainer == null) return;
+            var container = getContainer.invoke(null, level);
+            if (container == null) return;
+            synchronized (observedContainers) {
+                if (!observedContainers.add(container)) return;
+            }
+
+            var observerClass = Class.forName("dev.ryanhcode.sable.api.sublevel.SubLevelObserver");
+            var proxy = Proxy.newProxyInstance(SableServerBridge.class.getClassLoader(), new Class<?>[]{ observerClass }, (p, method, args) -> {
+                switch (method.getName()) {
+                    case "onSubLevelAdded" -> {
+                        if (args != null && args.length == 1) wakeStructure(level, args[0]);
+                        return null;
+                    }
+                    case "hashCode" -> {
+                        return System.identityHashCode(p);
+                    }
+                    case "equals" -> {
+                        return args != null && args.length == 1 && p == args[0];
+                    }
+                    case "toString" -> {
+                        return "ComputerCraftCameraWake";
+                    }
+                    default -> {
+                        return null;
+                    }
+                }
+            });
+            container.getClass().getMethod("addObserver", observerClass).invoke(container, proxy);
+            LOG.info("[camera] Watching {} for newly arrived physics structures", level.dimension().location());
+        } catch (ClassNotFoundException e) {
+            broken = true;
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            broken = true;
+            LOG.warn("[camera] Could not watch for new Sable structures; cameras may not survive dimension warps", e);
+        }
+    }
+
+    /**
+     * Give a freshly added structure's plot a short ticking ticket, so block entities aboard get to run.
+     *
+     * @param level    The structure's level.
+     * @param subLevel The added structure (a Sable {@code SubLevel}).
+     */
+    private static void wakeStructure(ServerLevel level, Object subLevel) {
+        try {
+            var plot = subLevel.getClass().getMethod("getPlot").invoke(subLevel);
+            var bounds = (BoundingBox3ic) plot.getClass().getMethod("getBoundingBox").invoke(plot);
+            var centre = new ChunkPos(((bounds.minX() + bounds.maxX()) / 2) >> 4, ((bounds.minZ() + bounds.maxZ()) / 2) >> 4);
+            var radius = Math.min(6, Math.max(2, ((bounds.maxX() - bounds.minX()) >> 4) / 2 + 1));
+            level.getChunkSource().addRegionTicket(BroadcastChannels.CAMERA_TICKET, centre, radius, Unit.INSTANCE);
+            LOG.info("[camera] Waking structure plot at {} in {} so cameras aboard can resume", centre, level.dimension().location());
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            LOG.warn("[camera] Could not wake a newly arrived structure's plot", e);
         }
     }
 

@@ -143,8 +143,19 @@ public final class BroadcastChannels {
         if (viewer.position().distanceToSqr(screenPos) > 64 * 64) return false;
 
         var receivers = receiversAround(viewerLevel, screen);
-        return VideoLinks.linked(cameraLevel, transmitters(camera), viewerLevel, receivers);
+        var transmitters = transmitters(camera);
+        var linked = VideoLinks.linked(cameraLevel, transmitters, viewerLevel, receivers);
+        if (!linked && System.nanoTime() - lastLinkLog > 1_000_000_000L) {
+            lastLinkLog = System.nanoTime();
+            LOG.info(
+                "[camera] Link check failed: {} transmitter(s) around source {} in {}, {} receiver(s) around screen {}",
+                transmitters.size(), camera.sourcePosition(), cameraLevel.dimension().location(), receivers.size(), screen
+            );
+        }
+        return linked;
     }
+
+    private static long lastLinkLog = 0;
 
     /**
      * The modems serving a screen: those touching any of its blocks (every block of a multiblock monitor counts,
@@ -468,6 +479,9 @@ public final class BroadcastChannels {
         if (channel.ticketCooldown-- <= 0) {
             level.getChunkSource().addRegionTicket(CAMERA_TICKET, chunkPos, streamRadius(level) + 1, Unit.INSTANCE);
             channel.ticketCooldown = 20;
+            // Watch every level for structures arriving without players nearby (e.g. recreated by a dimension
+            // warp): a camera aboard needs its plot to tick once before it can resume broadcasting.
+            for (var other : level.getServer().getAllLevels()) SableServerBridge.watchForNewStructures(other);
         }
 
         // The broadcast only flows between modem-served ends (or to viewers stood right at the camera —
