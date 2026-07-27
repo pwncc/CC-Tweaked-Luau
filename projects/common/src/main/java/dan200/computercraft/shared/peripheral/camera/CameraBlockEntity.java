@@ -190,6 +190,22 @@ public final class CameraBlockEntity extends BlockEntity implements CameraHolder
     }
 
     @Override
+    public @Nullable Vec3 localViewPosition() {
+        var local = Vec3.atCenterOf(getBlockPos());
+        return SableSupport.poseAt(getLevel(), local) != null ? local : null;
+    }
+
+    @Override
+    public float localViewYaw() {
+        return localYaw();
+    }
+
+    @Override
+    public float localViewPitch() {
+        return localPitch();
+    }
+
+    @Override
     public boolean isSourceRemoved() {
         return isRemoved();
     }

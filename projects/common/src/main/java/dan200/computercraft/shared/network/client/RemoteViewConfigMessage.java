@@ -16,6 +16,7 @@ import net.minecraft.world.level.biome.BiomeManager;
 import net.minecraft.world.phys.Vec3;
 
 import java.util.Objects;
+import java.util.Optional;
 
 /**
  * Describes (or updates) the viewpoint of a camera broadcast the player is watching.
@@ -29,6 +30,11 @@ import java.util.Objects;
  * @param pitch         The view's pitch, in degrees.
  * @param roll          The view's roll, in degrees (cameras riding a banked physics structure).
  * @param fov           The vertical field of view, in degrees.
+ * @param localPos      The eye's structure-local position, when the camera rides a physics structure. The client
+ *                      re-transforms it through the structure's own interpolated pose each frame, gluing the view
+ *                      to the structure exactly as it is drawn.
+ * @param localYaw      The view's structure-local yaw, when riding a structure.
+ * @param localPitch    The view's structure-local pitch, when riding a structure.
  * @param streamRadius  The radius (in chunks) of the streamed area.
  * @param minSectionY   The lowest section y of the camera's level.
  * @param sectionCount  The number of sections per chunk column in the camera's level.
@@ -36,6 +42,7 @@ import java.util.Objects;
 public record RemoteViewConfigMessage(
     int channel, ResourceLocation dimension, ResourceLocation dimensionType, long biomeSeed, Vec3 cameraPos,
     float yaw, float pitch, float roll, float fov,
+    Optional<Vec3> localPos, float localYaw, float localPitch,
     int streamRadius, int minSectionY, int sectionCount
 ) implements NetworkMessage<ClientNetworkContext> {
     public static final StreamCodec<RegistryFriendlyByteBuf, RemoteViewConfigMessage> STREAM_CODEC = StreamCodec.of(
@@ -51,6 +58,13 @@ public record RemoteViewConfigMessage(
             buf.writeFloat(msg.pitch);
             buf.writeFloat(msg.roll);
             buf.writeFloat(msg.fov);
+            buf.writeOptional(msg.localPos, (b, pos) -> {
+                b.writeDouble(pos.x);
+                b.writeDouble(pos.y);
+                b.writeDouble(pos.z);
+            });
+            buf.writeFloat(msg.localYaw);
+            buf.writeFloat(msg.localPitch);
             buf.writeVarInt(msg.streamRadius);
             buf.writeVarInt(msg.minSectionY);
             buf.writeVarInt(msg.sectionCount);
@@ -59,6 +73,8 @@ public record RemoteViewConfigMessage(
             buf.readVarInt(), buf.readResourceLocation(), buf.readResourceLocation(), buf.readLong(),
             new Vec3(buf.readDouble(), buf.readDouble(), buf.readDouble()),
             buf.readFloat(), buf.readFloat(), buf.readFloat(), buf.readFloat(),
+            buf.readOptional(b -> new Vec3(b.readDouble(), b.readDouble(), b.readDouble())),
+            buf.readFloat(), buf.readFloat(),
             buf.readVarInt(), buf.readVarInt(), buf.readVarInt()
         )
     );
@@ -78,6 +94,7 @@ public record RemoteViewConfigMessage(
             BiomeManager.obfuscateSeed(level.getSeed()),
             camera.getViewPosition(),
             camera.getAbsoluteYaw(), camera.getPitch(), camera.getRoll(), camera.getFov(),
+            Optional.ofNullable(camera.localViewPosition()), camera.localViewYaw(), camera.localViewPitch(),
             BroadcastChannels.streamRadius(level), level.getMinSection(), level.getSectionsCount()
         );
     }

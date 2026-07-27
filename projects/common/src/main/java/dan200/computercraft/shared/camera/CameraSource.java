@@ -71,6 +71,38 @@ public interface CameraSource {
     }
 
     /**
+     * The view's eye position in <em>structure-local</em> coordinates, when this source rides a physics
+     * structure, or {@code null} otherwise. Viewers' clients re-transform this through the structure's own
+     * client-side (interpolated) pose every frame, so the view glues to the structure exactly as it is drawn -
+     * a server-streamed world pose would lag or lead the moving structure.
+     *
+     * @return The structure-local eye position, or {@code null} when not riding a structure.
+     */
+    default @Nullable Vec3 localViewPosition() {
+        return null;
+    }
+
+    /**
+     * The view's yaw within its own structure, in degrees. Only meaningful when {@link #localViewPosition()} is
+     * non-null.
+     *
+     * @return The structure-local yaw.
+     */
+    default float localViewYaw() {
+        return getAbsoluteYaw();
+    }
+
+    /**
+     * The view's pitch within its own structure, in degrees. Only meaningful when {@link #localViewPosition()}
+     * is non-null.
+     *
+     * @return The structure-local pitch.
+     */
+    default float localViewPitch() {
+        return getPitch();
+    }
+
+    /**
      * The vertical field of view in degrees.
      *
      * @return The view's field of view.

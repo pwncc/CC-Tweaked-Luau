@@ -201,6 +201,22 @@ public class TurtleCamera extends AbstractTurtleUpgrade {
         }
 
         @Override
+        public @Nullable Vec3 localViewPosition() {
+            var local = localPosition();
+            return SableSupport.poseAt(turtle.getLevel(), local) != null ? local : null;
+        }
+
+        @Override
+        public float localViewYaw() {
+            return localYaw();
+        }
+
+        @Override
+        public float localViewPitch() {
+            return state().pitch();
+        }
+
+        @Override
         public float getLocalPitch() {
             return state().pitch();
         }
