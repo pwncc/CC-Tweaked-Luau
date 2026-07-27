@@ -8,8 +8,6 @@
     },
     "client": [
         "BlockRenderDispatcherMixin",
-        "ClientPacketListenerMixin",
-        "CosmonauticsDeepSpaceHandlerMixin",
-        "CosmonauticsSkyHandlerMixin"
+        "ClientPacketListenerMixin"
     ]
 }
