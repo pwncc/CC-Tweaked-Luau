@@ -83,6 +83,20 @@ public final class RemoteViewRenderer implements AutoCloseable {
 
     private static boolean broken = false;
 
+    /** Whether a remote view is being drawn right now (i.e. the current level render is ours, not the player's). */
+    private static boolean drawing = false;
+
+    /**
+     * Whether the render pass currently executing belongs to a remote view rather than the player's own
+     * viewpoint. Compat hooks use this to keep other mods' full-screen effects (e.g. Cosmonautics' space sky)
+     * from reacting to our off-screen passes.
+     *
+     * @return Whether a remote view draw is in progress.
+     */
+    public static boolean isDrawing() {
+        return drawing;
+    }
+
     private final RemoteViewCache.ChannelView view;
     private final ResourceLocation textureId;
 
@@ -304,6 +318,7 @@ public final class RemoteViewRenderer implements AutoCloseable {
         var mainLevel = minecraft.level;
 
         try {
+            drawing = true;
             // Several render types bind the "main" target mid-pass, so ours must be it for the duration - and
             // parts of the pipeline query the "main" camera directly, so that must be ours too.
             access.computercraft$setMainRenderTarget(target);
@@ -338,6 +353,7 @@ public final class RemoteViewRenderer implements AutoCloseable {
                 minecraft.getTimer(), false, camera, gameRenderer, gameRenderer.lightTexture(), modelView, projection
             );
         } finally {
+            drawing = false;
             if (puppet != null) {
                 minecraft.level = mainLevel;
                 puppet.restoreParticles();
