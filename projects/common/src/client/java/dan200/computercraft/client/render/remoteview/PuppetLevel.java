@@ -170,6 +170,8 @@ public final class PuppetLevel {
         minecraft.getEntityRenderDispatcher().setLevel(minecraft.level);
         // The renderer's section grid must follow the camera, not the player (who is in another dimension).
         ((RemoteViewRenderOverride) renderer).computercraft$setCameraOverride(config.cameraPos());
+        // Physics structures synced to the viewer render inside this puppet too (e.g. a rocket in its own view).
+        if (minecraft.level != null) SableClientBridge.shareSubLevels(level, minecraft.level);
 
         LOG.info("[camera] Created puppet level for {} (channel {})", config.dimension(), config.channel());
         return new PuppetLevel(level, renderer, renderBuffers);

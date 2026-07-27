@@ -43,6 +43,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import java.util.WeakHashMap;
 
 /**
@@ -172,31 +173,88 @@ public final class BroadcastChannels {
     }
 
     /**
-     * Whether a player is currently receiving a camera broadcast from near a position in <em>their own</em>
-     * level. Sable's structure tracking uses this to keep a physics structure synced to players who watch it
-     * through a camera from beyond normal tracking range - a rocket must not vanish out of its own camera view.
+     * Whether a player is currently receiving a camera broadcast from near a position in a given level. Sable's
+     * structure tracking uses this to keep a physics structure synced to players who watch it through a camera
+     * from beyond normal tracking range (or from another dimension) - a rocket must not vanish out of its own
+     * camera view.
      *
-     * @param viewer The player to check.
-     * @param x      The position's x coordinate (typically a structure's origin).
-     * @param y      The position's y coordinate.
-     * @param z      The position's z coordinate.
+     * @param viewer      The player to check.
+     * @param cameraLevel The level the position is in (the tracked structure's level).
+     * @param x           The position's x coordinate (typically a structure's origin).
+     * @param y           The position's y coordinate.
+     * @param z           The position's z coordinate.
      * @return Whether the player watches a live camera near that position.
      */
-    public static boolean isWatchingNear(ServerPlayer viewer, double x, double y, double z) {
+    public static boolean isWatchingNear(ServerPlayer viewer, ServerLevel cameraLevel, double x, double y, double z) {
+        var channel = receivingChannel(viewer);
+        if (channel == null || channel.camera.cameraLevel() != cameraLevel) return false;
+
+        // Cameras ride anywhere on a structure, so allow a generous radius around its origin.
+        return channel.camera.getViewPosition().distanceToSqr(x, y, z) < 512 * 512;
+    }
+
+    /**
+     * The players in <em>other</em> dimensions who are receiving a camera broadcast from a camera in this level.
+     * Sable's structure tracking adopts them as honorary locals, so a structure stays synced to a pilot watching
+     * it from across a dimension boundary.
+     *
+     * @param level The level whose cameras are of interest.
+     * @return The cross-dimension watchers, or an empty list.
+     */
+    public static List<ServerPlayer> crossDimensionWatchers(ServerLevel level) {
+        BroadcastChannels instance;
+        synchronized (instances) {
+            instance = instances.get(level.getServer());
+        }
+        if (instance == null || instance.viewerIntents.isEmpty()) return List.of();
+
+        List<ServerPlayer> watchers = List.of();
+        for (var viewer : instance.viewerIntents.keySet()) {
+            if (viewer.level() == level || viewer.hasDisconnected()) continue;
+            var channel = instance.receivingChannelOf(viewer);
+            if (channel == null || channel.camera.cameraLevel() != level) continue;
+            if (watchers.isEmpty()) watchers = new ArrayList<>();
+            watchers.add(viewer);
+        }
+        return watchers;
+    }
+
+    /**
+     * Resolve a player as a cross-dimension watcher of this level's cameras, for Sable's tracking loops (which
+     * otherwise only find players standing in the level).
+     *
+     * @param level The level whose tracking is asking.
+     * @param uuid  The player to resolve.
+     * @return The player, or {@code null} when they are not a cross-dimension watcher of this level.
+     */
+    public static @Nullable ServerPlayer crossDimensionWatcher(ServerLevel level, UUID uuid) {
+        var player = level.getServer().getPlayerList().getPlayer(uuid);
+        if (player == null || player.level() == level) return null;
+
+        var channel = receivingChannel(player);
+        return channel != null && channel.camera.cameraLevel() == level ? player : null;
+    }
+
+    /**
+     * The channel a player is actively receiving, if any.
+     *
+     * @param viewer The player to look up.
+     * @return Their received channel, or {@code null}.
+     */
+    private static @Nullable Channel receivingChannel(ServerPlayer viewer) {
         BroadcastChannels instance;
         synchronized (instances) {
             instance = instances.get(viewer.server);
         }
-        if (instance == null) return false;
+        return instance == null ? null : instance.receivingChannelOf(viewer);
+    }
 
-        var intent = instance.viewerIntents.get(viewer);
-        if (intent == null) return false;
-        var channel = instance.channels.get(intent.channel());
-        if (channel == null || !channel.receiving.contains(viewer) || channel.camera.isSourceRemoved()) return false;
-        if (channel.camera.cameraLevel() != viewer.level()) return false;
-
-        // Cameras ride anywhere on a structure, so allow a generous radius around its origin.
-        return channel.camera.getViewPosition().distanceToSqr(x, y, z) < 512 * 512;
+    private @Nullable Channel receivingChannelOf(ServerPlayer viewer) {
+        var intent = viewerIntents.get(viewer);
+        if (intent == null) return null;
+        var channel = channels.get(intent.channel());
+        if (channel == null || !channel.receiving.contains(viewer) || channel.camera.isSourceRemoved()) return null;
+        return channel;
     }
 
     /**
