@@ -455,6 +455,8 @@ public final class PuppetLevel {
             var pos = BlockPos.containing(cameraPos);
             level.animateTick(pos.getX(), pos.getY(), pos.getZ());
             Minecraft.getInstance().particleEngine.tick();
+            // Rain and cloud animation run off the renderer's own tick counter, which nothing else advances.
+            renderer.tick();
         } finally {
             restoreParticles();
         }

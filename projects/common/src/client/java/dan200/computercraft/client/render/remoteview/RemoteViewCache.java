@@ -129,6 +129,9 @@ public final class RemoteViewCache {
 
         for (var view : views.values()) {
             if (view.puppet != null) view.puppet.tick(view.config().cameraPos());
+            // Dedicated renderers never see Minecraft's own levelRenderer.tick(), so advance them here: rain and
+            // cloud animation run off the renderer's tick counter and freeze mid-air without it.
+            if (view.local != null) view.local.renderer().tick();
         }
 
         var frame = FrameInfo.getRenderFrame();
