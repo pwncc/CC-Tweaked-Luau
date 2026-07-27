@@ -178,6 +178,60 @@ bench("serialize", function()
     return #out
 end)
 
+bench("json", function()
+    local records = {}
+    for i = 1, 200 do
+        records[i] = {
+            id = i,
+            name = "record-" .. i,
+            position = { x = i * 1.5, y = -i, z = i % 32 },
+            tags = { "alpha", "beta", i % 2 == 0 and "even" or "odd" },
+        }
+    end
+    local out, back
+    for _ = 1, 50 do
+        out = textutils.serialiseJSON(records)
+        back = textutils.unserialiseJSON(out)
+    end
+    return #out + #back
+end)
+
+bench("compress", function()
+    local parts = {}
+    for i = 1, 400 do
+        parts[i] = ("[%03d] the quick brown fox jumps over the lazy dog\n"):format(i % 40)
+    end
+    local text = table.concat(parts)
+    local compressed
+    for _ = 1, 50 do
+        compressed = textutils.compress(text)
+        assert(textutils.decompress(compressed) == text)
+    end
+    return #compressed
+end)
+
+bench("frames_render", function()
+    local frames = require "cc.frames"
+
+    -- A 160x90 synthetic frame with a gradient and some structure.
+    local pixels = {}
+    for y = 1, 90 do
+        for x = 1, 160 do
+            local r = math.floor(x * 255 / 160)
+            local g = math.floor(y * 255 / 90)
+            local b = (x + y) % 2 == 0 and 255 or 0
+            pixels[#pixels + 1] = string.char(r, g, b)
+        end
+    end
+    local frame = { width = 160, height = 90, format = "rgb888", data = table.concat(pixels) }
+
+    local rendered
+    for _ = 1, 20 do
+        rendered = frames.render(frame, 51, 19)
+    end
+    return #rendered.lines
+end)
+
 local haveGfx, gfxModule = pcall(require, "mineos.gfx")
 if haveGfx then
     bench("gfx_text", gfxWorkload(gfxModule))

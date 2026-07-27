@@ -469,14 +469,22 @@ public class ComputerTestDelegate {
     }
 
     /**
-     * Pick the {@link ILuaMachine.Factory} to run tests against. This is chosen with the {@code cc.lua.machine}
-     * system property: the Luau runtime when set to {@code luau}, and Cobalt (with coverage tracking) otherwise.
+     * Pick the {@link ILuaMachine.Factory} to run tests against, from the {@code cc.lua.machine} system property or
+     * the {@code CC_LUA_MACHINE} environment variable.
+     * <p>
+     * This defaults to {@code luau}, the runtime the mod actually ships. {@code cobalt} selects Cobalt with coverage
+     * tracking, which is still useful for coverage runs, but it must be asked for explicitly — defaulting to it meant
+     * a plain {@code :core:test} silently exercised a runtime we do not ship. An unrecognised value is an error rather
+     * than a quiet fall back to Cobalt, so a typo cannot disguise itself as a passing Luau run.
      */
     private ILuaMachine.Factory machineFactory() {
-        var machine = System.getProperty("cc.lua.machine", System.getenv().getOrDefault("CC_LUA_MACHINE", "cobalt"));
+        var machine = System.getProperty("cc.lua.machine", System.getenv().getOrDefault("CC_LUA_MACHINE", "luau"));
         return switch (machine) {
             case "luau" -> LuauMachine::new;
-            default -> CoverageLuaMachine::new;
+            case "cobalt" -> CoverageLuaMachine::new;
+            default -> throw new IllegalArgumentException(
+                "Unknown Lua machine \"" + machine + "\": expected \"luau\" or \"cobalt\"."
+            );
         };
     }
 

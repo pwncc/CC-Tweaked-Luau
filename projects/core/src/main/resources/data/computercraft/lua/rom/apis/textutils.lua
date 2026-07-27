@@ -753,6 +753,8 @@ do
 
         textutils.unserialiseJSON('{"name": "Steve", "age": null}', { parse_null = true })
     ]]
+    local native_unserializeJSON = _CC_NATIVE_TEXTUTILS and _CC_NATIVE_TEXTUTILS.unserializeJSON
+
     unserialise_json = function(s, options)
         expect(1, s, "string")
         expect(2, options, "table", "nil")
@@ -763,6 +765,16 @@ do
             field(options, "parse_empty_array", "boolean", "nil")
         else
             options = {}
+        end
+
+        -- On the Luau runtime standard JSON is parsed natively; the parser
+        -- below remains the reference implementation and the NBT-style path.
+        if native_unserializeJSON and not options.nbt_style then
+            local res, err = native_unserializeJSON(
+                s, options.parse_null or false, options.parse_empty_array ~= false,
+                json_null, empty_json_array)
+            if err then return nil, err end
+            return res
         end
 
         local ok, res, pos = pcall(decode_impl, s, skip(s, 1), options)
@@ -922,6 +934,8 @@ functions and tables which appear multiple times.
 @see textutils.json_null Use to serialise a JSON `null` value.
 @see textutils.empty_json_array Use to serialise a JSON empty array.
 ]]
+local native_serializeJSON = _CC_NATIVE_TEXTUTILS and _CC_NATIVE_TEXTUTILS.serializeJSON
+
 function serializeJSON(t, options)
     expect(1, t, "table", "string", "number", "boolean")
     expect(2, options, "table", "boolean", "nil")
@@ -935,6 +949,13 @@ function serializeJSON(t, options)
         options = {}
     end
 
+    -- On the Luau runtime the common path is serialised natively;
+    -- serializeJSONImpl remains the reference implementation and handles the
+    -- nbt_style/unicode_strings options.
+    if native_serializeJSON and not options.nbt_style and not options.unicode_strings then
+        return native_serializeJSON(t, options.allow_repetitions or false, empty_json_array, json_null)
+    end
+
     local tTracking = {}
     return serializeJSONImpl(t, tTracking, options)
 end
@@ -943,6 +964,101 @@ serialiseJSON = serializeJSON -- GB version
 
 unserializeJSON = unserialise_json
 unserialiseJSON = unserialise_json
+
+local native_compress = _CC_NATIVE_TEXTUTILS and _CC_NATIVE_TEXTUTILS.compress
+local native_decompress = _CC_NATIVE_TEXTUTILS and _CC_NATIVE_TEXTUTILS.decompress
+
+local function pack_u32(n)
+    return string.char(
+        n % 256, math.floor(n / 256) % 256,
+        math.floor(n / 65536) % 256, math.floor(n / 16777216) % 256
+    )
+end
+
+--[[- Compress a string.
+
+Uses a small LZ77-style scheme ("CCZ"), suitable for shrinking logs, saved
+data or rednet payloads. The output can always be restored with
+[`textutils.decompress`], on any computer.
+
+On the Luau runtime compression runs natively and typically shrinks
+repetitive text considerably. On other runtimes this still produces a valid
+(if uncompressed) CCZ stream, so data stays portable between the two.
+
+@tparam string data The string to compress.
+@treturn string The compressed data.
+@see textutils.decompress
+@since 1.121.0
+@usage Compress a file's contents.
+
+    local h = fs.open("big.txt", "rb")
+    local compressed = textutils.compress(h.readAll())
+    h.close()
+]]
+function compress(data)
+    expect(1, data, "string")
+    if native_compress then return native_compress(data) end
+
+    -- Reference fallback: a stored (uncompressed) CCZ block. Decompressors
+    -- on every runtime understand both forms.
+    return "CCZ0" .. pack_u32(#data) .. data
+end
+
+--[[- Decompress a string previously compressed with [`textutils.compress`].
+
+@tparam string data The compressed data.
+@treturn string The original string.
+@throws If the data is not a valid CCZ stream.
+@see textutils.compress
+@since 1.121.0
+]]
+function decompress(data)
+    expect(1, data, "string")
+    if native_decompress then return native_decompress(data) end
+
+    if #data < 8 or data:sub(1, 3) ~= "CCZ" then error("Invalid compressed data", 0) end
+    local version = data:sub(4, 4)
+    local b1, b2, b3, b4 = data:byte(5, 8)
+    local expected = b1 + b2 * 256 + b3 * 65536 + b4 * 16777216
+
+    if version == "0" then
+        if #data - 8 ~= expected then error("Invalid compressed data", 0) end
+        return data:sub(9)
+    elseif version ~= "1" then
+        error("Invalid compressed data", 0)
+    end
+
+    local out, n = {}, 0
+    local pos = 9
+    while pos <= #data and n < expected do
+        local control = data:byte(pos)
+        pos = pos + 1
+        for _ = 0, 7 do
+            if n >= expected then break end
+            if control % 2 == 1 then
+                if pos > #data then error("Invalid compressed data", 0) end
+                n = n + 1
+                out[n] = data:sub(pos, pos)
+                pos = pos + 1
+            else
+                if pos + 1 > #data then error("Invalid compressed data", 0) end
+                local lo, hi = data:byte(pos, pos + 1)
+                local dist = lo + math.floor(hi / 16) * 256
+                local len = hi % 16 + 3
+                pos = pos + 2
+                if dist == 0 or dist > n then error("Invalid compressed data", 0) end
+                for _ = 1, len do
+                    n = n + 1
+                    out[n] = out[n - dist]
+                end
+            end
+            control = math.floor(control / 2)
+        end
+    end
+
+    if n ~= expected then error("Invalid compressed data", 0) end
+    return table.concat(out)
+end
 
 --- Replaces certain characters in a string to make it safe for use in URLs or POST data.
 --

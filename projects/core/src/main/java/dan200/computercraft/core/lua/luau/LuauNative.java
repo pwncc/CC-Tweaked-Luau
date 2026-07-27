@@ -40,11 +40,23 @@ final class LuauNative {
 
     private static volatile @Nullable Boolean loaded;
 
+    /**
+     * Why the library could not be loaded, if it could not be. Held as a description rather than the {@link Throwable}
+     * itself, so we do not pin a stack trace (and its class loaders) in a static field for the life of the process. The
+     * full trace is logged when the load fails. Written under the {@code LuauNative} monitor before {@link #loaded}, so
+     * any thread that reads {@code loaded == false} also sees this.
+     */
+    private static @Nullable String failure;
+
     private LuauNative() {
     }
 
     /**
      * Attempt to load the native library, returning whether it is available on this platform.
+     * <p>
+     * This is only for callers that must tolerate its absence, such as tests that skip themselves. Production code
+     * should use {@link #checkAvailable()}: there is no fallback runtime, so a missing library is a fatal error rather
+     * than something to degrade around.
      *
      * @return Whether the Luau runtime can be used.
      */
@@ -61,11 +73,35 @@ final class LuauNative {
                 loaded = true;
                 return true;
             } catch (Throwable e) {
-                LOG.warn("Cannot load the Luau native library. Computers will fall back to the Cobalt runtime.", e);
+                LOG.error("Cannot load the Luau native library for platform {}.", platform(), e);
+                failure = e.toString();
                 loaded = false;
                 return false;
             }
         }
+    }
+
+    /**
+     * Ensure the native library is loaded, throwing a descriptive error if it is not.
+     * <p>
+     * This mod runs Lua exclusively on the Luau runtime. If the library cannot be loaded there is nothing to fall back
+     * to, so we fail loudly at startup rather than letting every computer break at boot.
+     *
+     * @throws IllegalStateException If the library could not be loaded.
+     */
+    static void checkAvailable() {
+        if (isAvailable()) return;
+
+        throw new IllegalStateException(
+            "Cannot load the Luau native library for platform " + platform() + " (looked for the classpath resource "
+                + libraryResource() + "). This mod has no other Lua runtime, so computers cannot be started.\n"
+                + "Cause: " + failure + " (see the log above for the full stack trace).\n"
+                + "If this platform is unsupported, a library must be built for it; see "
+                + "projects/core/src/main/native/ccluau/README.md.\n"
+                + "If the library is present but will not load, the extraction directory may be mounted noexec: set "
+                + "-Dcc.luau.cache=<dir> to a writable directory that permits execution, or -Dcc.luau.native=<path> to "
+                + "load a library directly."
+        );
     }
 
     private static void load() throws IOException {
@@ -75,7 +111,7 @@ final class LuauNative {
             return;
         }
 
-        var resource = "lib/ccluau/" + platform() + "/" + libraryName();
+        var resource = libraryResource();
         var url = LuauNative.class.getClassLoader().getResource(resource);
         if (url == null) throw new IOException("No such resource " + resource);
 
@@ -144,6 +180,15 @@ final class LuauNative {
         };
 
         return osName + "-" + archName;
+    }
+
+    /**
+     * The classpath resource holding the library for the current platform.
+     *
+     * @return The resource path.
+     */
+    private static String libraryResource() {
+        return "lib/ccluau/" + platform() + "/" + libraryName();
     }
 
     private static String libraryName() {

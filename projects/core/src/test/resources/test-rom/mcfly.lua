@@ -488,7 +488,26 @@ local function describe(name, body)
     test_stack.n = n - 1
 end
 
+--- Whether we are running on the Cobalt runtime. The Luau runtime sets _VERSION to "Luau".
+local is_cobalt = _VERSION ~= "Luau"
+
+--- Whether any level of the current test path is tagged as Cobalt-only.
+--
+-- The tag may sit on the test itself or on an enclosing describe (as table.sort's does), so the
+-- whole stack is checked rather than just the leaf name.
+local function is_cobalt_only()
+    for i = 1, test_stack.n do
+        if test_stack[i]:find(":cobalt_%a+$") then return true end
+    end
+    return false
+end
+
 --- Declare a single test within a context
+--
+-- Tests tagged :cobalt_yield or :cobalt_debug exercise capabilities that only Cobalt has -- yielding
+-- across a C-call boundary (string.gsub, table.sort comparators) and debug hooks. Luau cannot
+-- implement these, so on Luau they are reported as pending rather than failing: they are not
+-- regressions, and letting them fail would leave the suite permanently red and hide real breakage.
 --
 -- @tparam string name   What you are testing
 -- @tparam function body A function which runs the test, failing if it does
@@ -502,11 +521,12 @@ local function it(name, body)
     local n = test_stack.n + 1
     test_stack[n], test_stack.n, tests_locked = name, n, true
 
-    do_test {
-        action = body,
-        before = before_each_fns,
-        definition = format_loc(debug.getinfo(2, "Sl")),
-    }
+    local definition = format_loc(debug.getinfo(2, "Sl"))
+    if not is_cobalt and is_cobalt_only() then
+        do_test { pending = true, trace = definition, definition = definition }
+    else
+        do_test { action = body, before = before_each_fns, definition = definition }
+    end
 
     -- Pop the test from the stack
     test_stack.n, tests_locked = n - 1, false

@@ -33,7 +33,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * A simple benchmark comparing the Cobalt and Luau runtimes on CPU-bound Lua workloads.
  * <p>
- * This is skipped by default: run with {@code -Dcc.benchmark=true} (and optionally {@code -Dcc.lua.machine=luau}).
+ * This is skipped by default: run with {@code -Dcc.benchmark=true}. The runtime defaults to Luau; pass
+ * {@code -Dcc.lua.machine=cobalt} to measure the Cobalt baseline instead.
  * Results are printed and written to {@code build/machine-benchmark-<machine>.txt}.
  *
  * @see LuauMachine
@@ -46,10 +47,13 @@ public class LuaMachineBenchmark {
     public void benchmark() throws Exception {
         Assumptions.assumeTrue(System.getProperty("cc.benchmark") != null, "Benchmarks are disabled (set -Dcc.benchmark=true)");
 
-        var machine = System.getProperty("cc.lua.machine", "cobalt");
+        var machine = System.getProperty("cc.lua.machine", "luau");
         ILuaMachine.Factory factory = switch (machine) {
             case "luau" -> LuauMachine::new;
-            default -> CobaltLuaMachine::new;
+            case "cobalt" -> CobaltLuaMachine::new;
+            default -> throw new IllegalArgumentException(
+                "Unknown Lua machine \"" + machine + "\": expected \"luau\" or \"cobalt\"."
+            );
         };
 
         String program;

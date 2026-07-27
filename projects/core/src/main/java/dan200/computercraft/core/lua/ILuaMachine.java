@@ -13,9 +13,10 @@ import java.io.InputStream;
  * Represents a machine which will execute Lua code. Technically this API is flexible enough to support many languages,
  * but you'd need a way to provide alternative ROMs, BIOSes, etc...
  * <p>
- * There should only be one concrete implementation at any one time, which is currently {@link CobaltLuaMachine}. If
- * external mod authors are interested in registering their own machines, we can look into how we can provide some
- * mechanism for registering these.
+ * The implementation used at runtime is always {@link dan200.computercraft.core.lua.luau.LuauMachine}. {@link
+ * CobaltLuaMachine} is retained for benchmarking and coverage runs, which select it explicitly, and for its value
+ * conversion helpers — it is never chosen as a fallback. If external mod authors are interested in registering their
+ * own machines, we can look into how we can provide some mechanism for registering these.
  */
 public interface ILuaMachine {
     /**

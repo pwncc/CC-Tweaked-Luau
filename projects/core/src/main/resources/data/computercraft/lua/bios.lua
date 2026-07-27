@@ -892,6 +892,11 @@ if bAPIError then
 end
 
 -- Set default settings
+settings.define("bios.panic_screen", {
+    default = true,
+    description = "Show a full-screen kernel panic (with a reboot option) when the shell crashes, instead of a plain error message.",
+    type = "boolean",
+})
 settings.define("shell.allow_startup", {
     default = true,
     description = "Run startup files when the computer turns on.",
@@ -1010,6 +1015,73 @@ if fs.exists(".settings") then
     settings.load(".settings")
 end
 
+-- Draw a full-screen kernel panic and wait for the user to choose between
+-- rebooting and shutting down. Any error here falls back to the plain
+-- printError path in the caller.
+local function kernelPanic(err)
+    local w, h = term.getSize()
+    local colour = term.isColour()
+    term.setBackgroundColour(colour and colours.blue or colours.black)
+    term.setTextColour(colour and colours.white or colours.white)
+    term.setCursorBlink(false)
+    term.clear()
+
+    local function centre(y, text)
+        if #text > w then text = text:sub(1, w) end
+        term.setCursorPos(math.max(1, math.floor((w - #text) / 2) + 1), y)
+        term.write(text)
+    end
+
+    local y = h >= 13 and 2 or 1
+    term.setCursorPos(2, y)
+    term.setTextColour(colour and colours.yellow or colours.white)
+    term.write(":(")
+    y = y + 2
+
+    term.setTextColour(colours.white)
+    term.setCursorPos(2, y)
+    term.write("CraftOS ran into a problem.")
+    y = y + 2
+
+    -- Word-wrap the error into the panel.
+    local errText = tostring(err)
+    local x = 2
+    term.setCursorPos(x, y)
+    for word in errText:gmatch("%S+") do
+        if x + #word > w and x > 2 then
+            y = y + 1
+            x = 2
+            if y > h - 4 then break end
+            term.setCursorPos(x, y)
+        end
+        term.write(word .. " ")
+        x = x + #word + 1
+    end
+    y = y + 2
+
+    if y <= h - 3 and h >= 12 then
+        term.setTextColour(colour and colours.lightBlue or colours.white)
+        term.setCursorPos(2, y)
+        term.write(("uptime %ds, day %d"):format(math.floor(os.clock()), os.day()))
+    end
+
+    term.setTextColour(colour and colours.yellow or colours.white)
+    centre(h - 1, "[R]eboot    [any] Shut down")
+
+    while true do
+        local _, key = os.pullEventRaw("key")
+        if key == keys.r then
+            term.setBackgroundColour(colours.black)
+            term.setTextColour(colours.white)
+            term.clear()
+            term.setCursorPos(1, 1)
+            os.reboot()
+        elseif key ~= nil then
+            return
+        end
+    end
+end
+
 -- Run the shell
 local ok, err = pcall(parallel.waitForAny,
     function()
@@ -1028,12 +1100,24 @@ local ok, err = pcall(parallel.waitForAny,
 -- If the shell errored, let the user read it.
 term.redirect(term.native())
 if not ok then
-    printError(err)
-    pcall(function()
-        term.setCursorBlink(false)
-        print("Press any key to continue")
-        os.pullEvent("key")
-    end)
+    if settings.get("bios.panic_screen") then
+        local shown = pcall(kernelPanic, err)
+        if not shown then
+            printError(err)
+            pcall(function()
+                term.setCursorBlink(false)
+                print("Press any key to continue")
+                os.pullEvent("key")
+            end)
+        end
+    else
+        printError(err)
+        pcall(function()
+            term.setCursorBlink(false)
+            print("Press any key to continue")
+            os.pullEvent("key")
+        end)
+    end
 end
 
 -- End

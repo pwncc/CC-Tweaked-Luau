@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
@@ -2308,6 +2309,952 @@ static int textutilsSerialize(lua_State* L) {
 }
 
 // ---------------------------------------------------------------------------
+// Native textutils JSON: mirrors serializeJSONImpl / unserialise_json in
+// rom/apis/textutils.lua for the default options. The Lua wrappers fall back
+// to the reference implementation for nbt_style/unicode_strings, so
+// behaviour is identical across runtimes.
+// ---------------------------------------------------------------------------
+
+// Append a JSON string literal, following serializeJSONString's default
+// path: named escapes, \u00XX for other C0 controls and for 0x7F-0xFF.
+static void jsonAppendString(std::string& out, const char* str, size_t len) {
+    static const char* HEX = "0123456789ABCDEF";
+    out += '"';
+    for (size_t i = 0; i < len; i++) {
+        unsigned char c = (unsigned char) str[i];
+        switch (c) {
+        case '"': out += "\\\""; break;
+        case '\\': out += "\\\\"; break;
+        case '\b': out += "\\b"; break;
+        case '\f': out += "\\f"; break;
+        case '\n': out += "\\n"; break;
+        case '\r': out += "\\r"; break;
+        case '\t': out += "\\t"; break;
+        default:
+            if (c < 0x20 || c >= 0x7F) {
+                out += "\\u00";
+                out += HEX[(c >> 4) & 0xF];
+                out += HEX[c & 0xF];
+            } else {
+                out += (char) c;
+            }
+        }
+    }
+    out += '"';
+}
+
+// Append a number exactly as tostring() would print it, so native output
+// matches the reference implementation on this runtime.
+static void jsonAppendNumber(lua_State* L, std::string& out, int idx) {
+    lua_pushvalue(L, idx);
+    size_t len;
+    const char* s = lua_tolstring(L, -1, &len);
+    out.append(s, len);
+    lua_pop(L, 1);
+}
+
+struct JsonSerializeState {
+    lua_State* L;
+    bool allowRepetitions;
+    std::map<const void*, bool> tracking;
+    int emptyArrayIdx; // absolute stack index of textutils.empty_json_array
+    int nullIdx;       // absolute stack index of textutils.json_null
+};
+
+// Serialize the value at the given absolute stack index into out.
+static void jsonSerializeValue(JsonSerializeState& s, std::string& out, int idx, int depth) {
+    lua_State* L = s.L;
+
+    if (lua_rawequal(L, idx, s.emptyArrayIdx)) {
+        out += "[]";
+        return;
+    }
+    if (lua_rawequal(L, idx, s.nullIdx)) {
+        out += "null";
+        return;
+    }
+
+    switch (lua_type(L, idx)) {
+    case LUA_TTABLE: {
+        if (depth > 512) luaL_error(L, "Cannot serialize table with recursive entries");
+        luaL_checkstack(L, 6, "table is too deeply nested");
+
+        const void* ptr = lua_topointer(L, idx);
+        auto existing = s.tracking.find(ptr);
+        if (existing != s.tracking.end()) {
+            if (!existing->second) luaL_error(L, "Cannot serialize table with repeated entries");
+            luaL_error(L, "Cannot serialize table with recursive entries");
+        }
+        s.tracking[ptr] = true;
+
+        lua_pushnil(L);
+        if (lua_next(L, idx) == 0) {
+            out += "{}";
+        } else {
+            lua_pop(L, 2);
+
+            // Mirror the reference exactly: object entries in pairs order,
+            // the array part read up to the largest numeric key (with
+            // "null" filling interior gaps), objects win ties.
+            std::string objBuf = "{";
+            std::string arrBuf = "[";
+            long long objectSize = 0, arraySize = 0;
+            double largestArrayIndex = 0;
+
+            lua_pushnil(L);
+            while (lua_next(L, idx) != 0) {
+                if (lua_type(L, -2) == LUA_TSTRING) {
+                    if (objectSize > 0) objBuf += ",";
+                    size_t keyLen;
+                    const char* key = lua_tolstring(L, -2, &keyLen);
+                    jsonAppendString(objBuf, key, keyLen);
+                    objBuf += ":";
+                    jsonSerializeValue(s, objBuf, lua_gettop(L), depth + 1);
+                    objectSize++;
+                } else if ((lua_type(L, -2) == LUA_TNUMBER || lua_type(L, -2) == LUA_TINTEGER)) {
+                    double k = lua_tonumber(L, -2);
+                    if (k > largestArrayIndex) largestArrayIndex = k;
+                }
+                lua_pop(L, 1);
+            }
+
+            for (long long k = 1; k <= (long long) largestArrayIndex; k++) {
+                if (arraySize > 0) arrBuf += ",";
+                lua_rawgeti(L, idx, (int) k);
+                if (lua_isnil(L, -1)) {
+                    arrBuf += "null";
+                } else {
+                    jsonSerializeValue(s, arrBuf, lua_gettop(L), depth + 1);
+                }
+                lua_pop(L, 1);
+                arraySize++;
+            }
+
+            if (objectSize > 0 || arraySize == 0) {
+                out += objBuf;
+                out += "}";
+            } else {
+                out += arrBuf;
+                out += "]";
+            }
+        }
+
+        if (s.allowRepetitions) {
+            s.tracking.erase(ptr);
+        } else {
+            s.tracking[ptr] = false;
+        }
+        break;
+    }
+
+    case LUA_TSTRING: {
+        size_t len;
+        const char* str = lua_tolstring(L, idx, &len);
+        jsonAppendString(out, str, len);
+        break;
+    }
+
+    case LUA_TNUMBER:
+    case LUA_TINTEGER:
+        jsonAppendNumber(L, out, idx);
+        break;
+
+    case LUA_TBOOLEAN:
+        out += lua_toboolean(L, idx) ? "true" : "false";
+        break;
+
+    default:
+        luaL_error(L, "Cannot serialize type %s", luaL_typename(L, idx));
+    }
+}
+
+// _CC_NATIVE_TEXTUTILS.serializeJSON(value, allowRepetitions, emptyArray, jsonNull) -> string
+static int textutilsSerializeJSON(lua_State* L) {
+    lua_settop(L, 4);
+
+    JsonSerializeState s{};
+    s.L = L;
+    s.allowRepetitions = lua_toboolean(L, 2) != 0;
+    s.emptyArrayIdx = 3;
+    s.nullIdx = 4;
+
+    std::string out;
+    out.reserve(64);
+    jsonSerializeValue(s, out, 1, 0);
+
+    lua_pushlstring(L, out.data(), out.size());
+    return 1;
+}
+
+// The JSON parser throws these internally; the entry point converts them to
+// the wrapper's "Malformed JSON at position %d: ..." return value. `quoted`
+// is rendered with string.format("%q", ...) at catch time so quoting stays
+// identical to the reference implementation.
+struct JsonParseError {
+    size_t pos; // 1-based
+    std::string message;    // printf-style with an optional %s for `quoted`
+    std::string quoted;     // string to be %q-quoted into the message
+    bool hasQuoted;
+    bool quotedIsEndOfInput; // render as the literal text "end of input"
+};
+
+static JsonParseError jsonError(size_t pos, const char* message) {
+    return JsonParseError{ pos, message, "", false, false };
+}
+
+static JsonParseError jsonErrorQ(size_t pos, const char* message, std::string quoted) {
+    return JsonParseError{ pos, message, std::move(quoted), true, false };
+}
+
+// expected(pos, actual, exp): "" renders as end of input, otherwise %q.
+static JsonParseError jsonExpected(size_t pos, std::string actual, const char* exp) {
+    std::string message = std::string("Unexpected %s, expected ") + exp + ".";
+    JsonParseError err{ pos, std::move(message), std::move(actual), true, false };
+    if (err.quoted.empty()) err.quotedIsEndOfInput = true;
+    return err;
+}
+
+struct JsonParser {
+    lua_State* L;
+    const char* str;
+    size_t len;
+    bool parseNull;
+    bool parseEmptyArray;
+    int nullIdx;       // absolute stack index of textutils.json_null
+    int emptyArrayIdx; // absolute stack index of textutils.empty_json_array
+
+    char at(size_t pos) const { return pos < len ? str[pos] : '\0'; }
+    bool has(size_t pos) const { return pos < len; }
+
+    size_t skip(size_t pos) const {
+        while (pos < len && (str[pos] == ' ' || str[pos] == '\n' || str[pos] == '\r' || str[pos] == '\t')) pos++;
+        return pos;
+    }
+
+    // Parse a string starting after the opening quote; pushes the result.
+    size_t parseString(size_t pos) {
+        std::string buf;
+        while (true) {
+            if (!has(pos)) throw jsonError(pos + 1, "Unexpected end of input, expected '\"'.");
+            char c = str[pos];
+            if (c == '"') break;
+
+            if (c == '\\') {
+                if (!has(pos + 1)) throw jsonError(pos + 1, "Unexpected end of input, expected escape sequence.");
+                char e = str[pos + 1];
+                if (e == 'u') {
+                    unsigned int code = 0;
+                    bool ok = true;
+                    for (int i = 0; i < 4; i++) {
+                        char h = at(pos + 2 + i);
+                        if (h >= '0' && h <= '9') code = code * 16 + (h - '0');
+                        else if (h >= 'a' && h <= 'f') code = code * 16 + (h - 'a' + 10);
+                        else if (h >= 'A' && h <= 'F') code = code * 16 + (h - 'A' + 10);
+                        else { ok = false; break; }
+                    }
+                    if (!ok) {
+                        size_t avail = len > pos + 2 ? len - (pos + 2) : 0;
+                        if (avail > 4) avail = 4;
+                        throw jsonErrorQ(pos + 1, "Malformed unicode escape %s.", std::string(str + pos + 2, avail));
+                    }
+                    // Encode as UTF-8, as utf8.char does.
+                    if (code < 0x80) {
+                        buf += (char) code;
+                    } else if (code < 0x800) {
+                        buf += (char) (0xC0 | (code >> 6));
+                        buf += (char) (0x80 | (code & 0x3F));
+                    } else {
+                        buf += (char) (0xE0 | (code >> 12));
+                        buf += (char) (0x80 | ((code >> 6) & 0x3F));
+                        buf += (char) (0x80 | (code & 0x3F));
+                    }
+                    pos += 6;
+                } else {
+                    const char* unesc = nullptr;
+                    switch (e) {
+                    case 'b': unesc = "\b"; break;
+                    case 'f': unesc = "\f"; break;
+                    case 'n': unesc = "\n"; break;
+                    case 'r': unesc = "\r"; break;
+                    case 't': unesc = "\t"; break;
+                    case '"': unesc = "\""; break;
+                    case '/': unesc = "/"; break;
+                    case '\\': unesc = "\\"; break;
+                    }
+                    if (unesc == nullptr) throw jsonErrorQ(pos + 2, "Unknown escape character %s.", std::string(1, e));
+                    buf += unesc;
+                    pos += 2;
+                }
+            } else if ((unsigned char) c >= ' ') {
+                size_t start = pos;
+                while (pos < len) {
+                    unsigned char cc = (unsigned char) str[pos];
+                    if (cc < ' ' || cc == '"' || cc == '\\') break;
+                    pos++;
+                }
+                buf.append(str + start, pos - start);
+            } else {
+                throw jsonErrorQ(pos + 2, "Unescaped whitespace %s.", std::string(1, c));
+            }
+        }
+
+        lua_pushlstring(L, buf.data(), buf.size());
+        return pos + 1;
+    }
+
+    size_t parseNumber(size_t pos) {
+        // Mirror the reference pattern: -?%d+%.?%d*[eE]?[+-]?%d*
+        size_t p = pos;
+        if (at(p) == '-') p++;
+        size_t digitsStart = p;
+        while (p < len && isdigit((unsigned char) str[p])) p++;
+        if (p == digitsStart) {
+            throw jsonErrorQ(pos + 1, "Malformed number %s.", std::string(str + pos, p - pos));
+        }
+        if (at(p) == '.') {
+            p++;
+            while (p < len && isdigit((unsigned char) str[p])) p++;
+        }
+        if (at(p) == 'e' || at(p) == 'E') {
+            p++;
+            if (at(p) == '+' || at(p) == '-') p++;
+            while (p < len && isdigit((unsigned char) str[p])) p++;
+        }
+
+        std::string numStr(str + pos, p - pos);
+        char* end = nullptr;
+        double value = strtod(numStr.c_str(), &end);
+        if (end == nullptr || *end != '\0' || end == numStr.c_str()) {
+            throw jsonErrorQ(pos + 1, "Malformed number %s.", numStr);
+        }
+
+        lua_pushnumber(L, value);
+        return p;
+    }
+
+    // Parse the value at pos; pushes exactly one value (which may be nil for
+    // a JSON null with parse_null unset). Returns the following position.
+    size_t parseValue(size_t pos, int depth) {
+        if (depth > 256) throw jsonError(pos + 1, "Nesting too deep.");
+        luaL_checkstack(L, 8, "JSON is too deeply nested");
+
+        char c = at(pos);
+        if (c == '"') return parseString(pos + 1);
+        if (c == '-' || (c >= '0' && c <= '9')) return parseNumber(pos);
+
+        if (c == 't') {
+            if (pos + 3 < len && memcmp(str + pos + 1, "rue", 3) == 0) {
+                lua_pushboolean(L, 1);
+                return pos + 4;
+            }
+        } else if (c == 'f') {
+            if (pos + 4 < len && memcmp(str + pos + 1, "alse", 4) == 0) {
+                lua_pushboolean(L, 0);
+                return pos + 5;
+            }
+        } else if (c == 'n') {
+            if (pos + 3 < len && memcmp(str + pos + 1, "ull", 3) == 0) {
+                if (parseNull) {
+                    lua_pushvalue(L, nullIdx);
+                } else {
+                    lua_pushnil(L);
+                }
+                return pos + 4;
+            }
+        } else if (c == '{') {
+            lua_createtable(L, 0, 4);
+            int table = lua_gettop(L);
+
+            pos = skip(pos + 1);
+            if (!has(pos)) throw jsonError(pos + 1, "Unexpected end of input, expected '}'.");
+            if (str[pos] == '}') return pos + 1;
+
+            while (true) {
+                char k = at(pos);
+                if (k == '"') {
+                    pos = parseString(pos + 1);
+                } else {
+                    throw jsonExpected(pos + 1, has(pos) ? std::string(1, k) : std::string(), "object key");
+                }
+
+                pos = skip(pos);
+                if (at(pos) != ':') {
+                    throw jsonExpected(pos + 1, has(pos) ? std::string(1, str[pos]) : std::string(), "':'");
+                }
+
+                pos = parseValue(skip(pos + 1), depth + 1);
+                lua_rawset(L, table);
+
+                pos = skip(pos);
+                char d = at(pos);
+                if (d == '}') break;
+                if (d == ',') {
+                    pos = skip(pos + 1);
+                } else {
+                    throw jsonExpected(pos + 1, has(pos) ? std::string(1, d) : std::string(), "',' or '}'");
+                }
+            }
+
+            return pos + 1;
+        } else if (c == '[') {
+            pos = skip(pos + 1);
+            if (!has(pos)) throw jsonExpected(pos + 1, std::string(), "']'");
+            if (str[pos] == ']') {
+                if (parseEmptyArray) {
+                    lua_pushvalue(L, emptyArrayIdx);
+                } else {
+                    lua_createtable(L, 0, 0);
+                }
+                return pos + 1;
+            }
+
+            lua_createtable(L, 4, 0);
+            int table = lua_gettop(L);
+            int n = 0;
+
+            while (true) {
+                pos = parseValue(pos, depth + 1);
+                lua_rawseti(L, table, ++n);
+
+                pos = skip(pos);
+                char d = at(pos);
+                if (d == ']') break;
+                if (d == ',') {
+                    pos = skip(pos + 1);
+                } else {
+                    throw jsonExpected(pos + 1, has(pos) ? std::string(1, d) : std::string(), "',' or ']'");
+                }
+            }
+
+            return pos + 1;
+        } else if (!has(pos)) {
+            throw jsonError(pos + 1, "Unexpected end of input.");
+        }
+
+        throw jsonErrorQ(pos + 1, "Unexpected character %s.", std::string(1, c));
+    }
+};
+
+// Format a raw string with string.format("%q", ...) so quoting in error
+// messages matches the reference implementation.
+static std::string jsonQuote(lua_State* L, const std::string& value) {
+    lua_getglobal(L, "string");
+    lua_getfield(L, -1, "format");
+    lua_remove(L, -2);
+    lua_pushliteral(L, "%q");
+    lua_pushlstring(L, value.data(), value.size());
+    lua_call(L, 2, 1);
+    size_t len;
+    const char* s = lua_tolstring(L, -1, &len);
+    std::string out(s, len);
+    lua_pop(L, 1);
+    return out;
+}
+
+// _CC_NATIVE_TEXTUTILS.unserializeJSON(str, parseNull, parseEmptyArray, jsonNull, emptyArray)
+//   -> value | (nil, message)
+static int textutilsUnserializeJSON(lua_State* L) {
+    lua_settop(L, 5);
+    size_t len;
+    const char* str = luaL_checklstring(L, 1, &len);
+
+    JsonParser parser{};
+    parser.L = L;
+    parser.str = str;
+    parser.len = len;
+    parser.parseNull = lua_toboolean(L, 2) != 0;
+    parser.parseEmptyArray = lua_toboolean(L, 3) != 0;
+    parser.nullIdx = 4;
+    parser.emptyArrayIdx = 5;
+
+    int base = lua_gettop(L);
+    try {
+        size_t pos = parser.parseValue(parser.skip(0), 0);
+        pos = parser.skip(pos);
+        if (pos < len) {
+            throw jsonErrorQ(pos + 1, "Unexpected trailing character %s.", std::string(1, str[pos]));
+        }
+        return 1; // The parsed value is on top of the stack.
+    } catch (JsonParseError& err) {
+        lua_settop(L, base);
+
+        std::string detail;
+        if (err.hasQuoted) {
+            std::string rendered = err.quotedIsEndOfInput ? "end of input" : jsonQuote(L, err.quoted);
+            char buf[512];
+            snprintf(buf, sizeof(buf), err.message.c_str(), rendered.c_str());
+            detail = buf;
+        } else {
+            detail = err.message;
+        }
+
+        char full[600];
+        snprintf(full, sizeof(full), "Malformed JSON at position %d: %s", (int) err.pos, detail.c_str());
+        lua_pushnil(L);
+        lua_pushstring(L, full);
+        return 2;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Native textutils.compress/decompress: a small byte-oriented LZSS.
+//
+// Format: "CCZ1" + u32 LE original length + blocks of [control byte,
+// tokens...], each control bit (LSB first) marking a literal byte (1) or a
+// two-byte match (0): offset low 8 bits, then high nibble of the offset and
+// the length - 3 (matches are 3..18 bytes, window 4096). "CCZ0" marks an
+// uncompressed store (used when compression would not help, and by the
+// pure-Lua fallback encoder).
+// ---------------------------------------------------------------------------
+
+static const size_t CCZ_WINDOW = 4096;
+static const size_t CCZ_MIN_MATCH = 3;
+static const size_t CCZ_MAX_MATCH = 18;
+
+// _CC_NATIVE_TEXTUTILS.compress(str) -> string
+static int textutilsCompress(lua_State* L) {
+    size_t len;
+    const char* data = luaL_checklstring(L, 1, &len);
+    const unsigned char* in = (const unsigned char*) data;
+
+    std::string out;
+    out.reserve(len / 2 + 16);
+    out += "CCZ1";
+    for (int i = 0; i < 4; i++) out += (char) ((len >> (8 * i)) & 0xFF);
+
+    // Hash chains over 3-byte prefixes.
+    const int HASH_SIZE = 1 << 13;
+    std::vector<int> head(HASH_SIZE, -1);
+    std::vector<int> prev(len > 0 ? len : 1, -1);
+    auto hash3 = [&](size_t i) {
+        return (int) (((unsigned) in[i] * 2654435761u ^ (unsigned) in[i + 1] * 40503u ^ (unsigned) in[i + 2]) & (HASH_SIZE - 1));
+    };
+
+    size_t pos = 0;
+    while (pos < len) {
+        size_t controlAt = out.size();
+        out += '\0';
+        unsigned char control = 0;
+
+        for (int bit = 0; bit < 8 && pos < len; bit++) {
+            size_t bestLen = 0, bestDist = 0;
+
+            if (pos + CCZ_MIN_MATCH <= len) {
+                int candidate = head[hash3(pos)];
+                int depth = 0;
+                while (candidate >= 0 && depth < 32) {
+                    size_t dist = pos - (size_t) candidate;
+                    if (dist > CCZ_WINDOW - 1) break;
+                    size_t matchLen = 0;
+                    size_t maxLen = len - pos < CCZ_MAX_MATCH ? len - pos : CCZ_MAX_MATCH;
+                    while (matchLen < maxLen && in[candidate + matchLen] == in[pos + matchLen]) matchLen++;
+                    if (matchLen > bestLen) {
+                        bestLen = matchLen;
+                        bestDist = dist;
+                        if (matchLen == maxLen) break;
+                    }
+                    candidate = prev[candidate];
+                    depth++;
+                }
+            }
+
+            if (bestLen >= CCZ_MIN_MATCH) {
+                out += (char) (bestDist & 0xFF);
+                out += (char) (((bestDist >> 8) & 0x0F) << 4 | (bestLen - CCZ_MIN_MATCH));
+                // Insert every covered position into the chains.
+                for (size_t i = 0; i < bestLen && pos + i + CCZ_MIN_MATCH <= len; i++) {
+                    int h = hash3(pos + i);
+                    prev[pos + i] = head[h];
+                    head[h] = (int) (pos + i);
+                }
+                pos += bestLen;
+            } else {
+                control |= (unsigned char) (1 << bit);
+                out += (char) in[pos];
+                if (pos + CCZ_MIN_MATCH <= len) {
+                    int h = hash3(pos);
+                    prev[pos] = head[h];
+                    head[h] = (int) pos;
+                }
+                pos++;
+            }
+        }
+
+        out[controlAt] = (char) control;
+    }
+
+    // If we failed to shrink the input, store it raw instead.
+    if (out.size() >= len + 8) {
+        out.clear();
+        out += "CCZ0";
+        for (int i = 0; i < 4; i++) out += (char) ((len >> (8 * i)) & 0xFF);
+        out.append(data, len);
+    }
+
+    lua_pushlstring(L, out.data(), out.size());
+    return 1;
+}
+
+// _CC_NATIVE_TEXTUTILS.decompress(str) -> string
+static int textutilsDecompress(lua_State* L) {
+    size_t len;
+    const char* data = luaL_checklstring(L, 1, &len);
+    const unsigned char* in = (const unsigned char*) data;
+
+    if (len < 8 || memcmp(data, "CCZ", 3) != 0 || (data[3] != '0' && data[3] != '1')) {
+        luaL_error(L, "Invalid compressed data");
+    }
+
+    size_t expected = 0;
+    for (int i = 0; i < 4; i++) expected |= (size_t) in[4 + i] << (8 * i);
+
+    if (data[3] == '0') {
+        if (len - 8 != expected) luaL_error(L, "Invalid compressed data");
+        lua_pushlstring(L, data + 8, expected);
+        return 1;
+    }
+
+    std::string out;
+    out.reserve(expected);
+    size_t pos = 8;
+    while (pos < len && out.size() < expected) {
+        unsigned char control = in[pos++];
+        for (int bit = 0; bit < 8 && out.size() < expected; bit++) {
+            if (control & (1 << bit)) {
+                if (pos >= len) luaL_error(L, "Invalid compressed data");
+                out += (char) in[pos++];
+            } else {
+                if (pos + 1 >= len) luaL_error(L, "Invalid compressed data");
+                size_t dist = in[pos] | ((size_t) (in[pos + 1] >> 4) << 8);
+                size_t matchLen = (in[pos + 1] & 0x0F) + CCZ_MIN_MATCH;
+                pos += 2;
+                if (dist == 0 || dist > out.size()) luaL_error(L, "Invalid compressed data");
+                for (size_t i = 0; i < matchLen; i++) {
+                    out += out[out.size() - dist];
+                }
+            }
+        }
+    }
+
+    if (out.size() != expected) luaL_error(L, "Invalid compressed data");
+    lua_pushlstring(L, out.data(), out.size());
+    return 1;
+}
+
+// ---------------------------------------------------------------------------
+// Native frame renderer (_CC_NATIVE_FRAMES): converts RGB image frames
+// (e.g. from cameras) into a 16-colour palette plus teletext blit lines,
+// fast enough for live playback. Mirrored by the pure-Lua implementation in
+// rom/modules/main/cc/frames.lua.
+// ---------------------------------------------------------------------------
+
+struct FrameImage {
+    int width = 0, height = 0;
+    std::vector<uint8_t> rgb; // 3 bytes per pixel.
+};
+
+// Decode an rgb332/rgb888 frame string into 8-bit RGB.
+static bool frameDecode(const char* data, size_t len, int width, int height, const char* format, FrameImage& out) {
+    size_t pixels = (size_t) width * height;
+    out.width = width;
+    out.height = height;
+    out.rgb.resize(pixels * 3);
+
+    if (strcmp(format, "rgb332") == 0) {
+        if (len < pixels) return false;
+        for (size_t i = 0; i < pixels; i++) {
+            uint8_t v = (uint8_t) data[i];
+            out.rgb[i * 3] = (uint8_t) (((v >> 5) & 7) * 255 / 7);
+            out.rgb[i * 3 + 1] = (uint8_t) (((v >> 2) & 7) * 255 / 7);
+            out.rgb[i * 3 + 2] = (uint8_t) ((v & 3) * 255 / 3);
+        }
+        return true;
+    }
+    if (strcmp(format, "rgb888") == 0) {
+        if (len < pixels * 3) return false;
+        memcpy(out.rgb.data(), data, pixels * 3);
+        return true;
+    }
+    return false;
+}
+
+// Box-filter scale to the target size.
+static void frameScaleTo(const FrameImage& in, int targetW, int targetH, FrameImage& out) {
+    out.width = targetW;
+    out.height = targetH;
+    out.rgb.resize((size_t) targetW * targetH * 3);
+
+    for (int y = 0; y < targetH; y++) {
+        int y0 = (int) ((int64_t) y * in.height / targetH);
+        int y1 = (int) (((int64_t) y + 1) * in.height / targetH);
+        if (y1 <= y0) y1 = y0 + 1;
+        if (y1 > in.height) y1 = in.height;
+        for (int x = 0; x < targetW; x++) {
+            int x0 = (int) ((int64_t) x * in.width / targetW);
+            int x1 = (int) (((int64_t) x + 1) * in.width / targetW);
+            if (x1 <= x0) x1 = x0 + 1;
+            if (x1 > in.width) x1 = in.width;
+
+            uint32_t r = 0, g = 0, b = 0, n = 0;
+            for (int sy = y0; sy < y1; sy++) {
+                const uint8_t* row = in.rgb.data() + ((size_t) sy * in.width + x0) * 3;
+                for (int sx = x0; sx < x1; sx++) {
+                    r += row[0];
+                    g += row[1];
+                    b += row[2];
+                    row += 3;
+                    n++;
+                }
+            }
+            uint8_t* dst = out.rgb.data() + ((size_t) y * targetW + x) * 3;
+            dst[0] = (uint8_t) (r / n);
+            dst[1] = (uint8_t) (g / n);
+            dst[2] = (uint8_t) (b / n);
+        }
+    }
+}
+
+// Median-cut quantisation to at most 16 colours. Returns the palette and
+// fills `indexed` with a palette index per pixel.
+static void frameQuantise(const FrameImage& image, uint32_t palette[16], std::vector<uint8_t>& indexed) {
+    size_t pixels = (size_t) image.width * image.height;
+
+    struct Bucket {
+        std::vector<uint32_t> pix; // indices into the image
+    };
+    std::vector<Bucket> buckets(1);
+    buckets[0].pix.resize(pixels);
+    for (size_t i = 0; i < pixels; i++) buckets[0].pix[i] = (uint32_t) i;
+
+    auto channelOf = [&](uint32_t pixel, int channel) { return image.rgb[(size_t) pixel * 3 + channel]; };
+
+    while (buckets.size() < 16) {
+        // Find the bucket with the largest channel range (weighted by size).
+        int bestBucket = -1, bestChannel = 0;
+        int64_t bestScore = 0;
+        for (size_t i = 0; i < buckets.size(); i++) {
+            if (buckets[i].pix.size() < 2) continue;
+            for (int c = 0; c < 3; c++) {
+                uint8_t lo = 255, hi = 0;
+                for (auto p : buckets[i].pix) {
+                    auto v = channelOf(p, c);
+                    if (v < lo) lo = v;
+                    if (v > hi) hi = v;
+                }
+                int64_t score = (int64_t) (hi - lo) * (int64_t) buckets[i].pix.size();
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestBucket = (int) i;
+                    bestChannel = c;
+                }
+            }
+        }
+        if (bestBucket < 0 || bestScore == 0) break;
+
+        auto& source = buckets[(size_t) bestBucket].pix;
+        std::sort(source.begin(), source.end(), [&](uint32_t a, uint32_t b) {
+            return channelOf(a, bestChannel) < channelOf(b, bestChannel);
+        });
+        Bucket half;
+        auto mid = source.size() / 2;
+        half.pix.assign(source.begin() + mid, source.end());
+        source.resize(mid);
+        buckets.push_back(std::move(half));
+    }
+
+    uint8_t bucketOf[16][3] = {};
+    for (size_t i = 0; i < 16; i++) {
+        if (i < buckets.size() && !buckets[i].pix.empty()) {
+            uint64_t r = 0, g = 0, b = 0;
+            for (auto p : buckets[i].pix) {
+                r += channelOf(p, 0);
+                g += channelOf(p, 1);
+                b += channelOf(p, 2);
+            }
+            auto n = buckets[i].pix.size();
+            bucketOf[i][0] = (uint8_t) (r / n);
+            bucketOf[i][1] = (uint8_t) (g / n);
+            bucketOf[i][2] = (uint8_t) (b / n);
+        }
+        palette[i] = ((uint32_t) bucketOf[i][0] << 16) | ((uint32_t) bucketOf[i][1] << 8) | bucketOf[i][2];
+    }
+
+    indexed.resize(pixels);
+    for (size_t i = 0; i < buckets.size(); i++) {
+        for (auto p : buckets[i].pix) indexed[p] = (uint8_t) i;
+    }
+}
+
+static int frameColourDistance(uint32_t a, uint32_t b) {
+    int dr = (int) ((a >> 16) & 0xFF) - (int) ((b >> 16) & 0xFF);
+    int dg = (int) ((a >> 8) & 0xFF) - (int) ((b >> 8) & 0xFF);
+    int db = (int) (a & 0xFF) - (int) (b & 0xFF);
+    return dr * dr + dg * dg + db * db;
+}
+
+// _CC_NATIVE_FRAMES.render(data, width, height, format, charW, charH)
+//   -> palette table (16 ints), lines table ({text, fg, bg} per row)
+static int framesRender(lua_State* L) {
+    size_t len;
+    const char* data = luaL_checklstring(L, 1, &len);
+    int width = (int) luaL_checkinteger(L, 2);
+    int height = (int) luaL_checkinteger(L, 3);
+    const char* format = luaL_checkstring(L, 4);
+    int charW = (int) luaL_checkinteger(L, 5);
+    int charH = (int) luaL_checkinteger(L, 6);
+
+    if (width < 1 || height < 1 || width > 4096 || height > 4096) luaL_error(L, "Frame size out of range");
+    if (charW < 1 || charH < 1 || charW > 1024 || charH > 1024) luaL_error(L, "Target size out of range");
+
+    FrameImage image;
+    if (!frameDecode(data, len, width, height, format, image)) {
+        luaL_error(L, "Malformed frame (bad format or too short)");
+    }
+
+    // Scale to the subpixel grid (2x3 per character), quantise, then encode
+    // each 2x3 cell as a teletext character.
+    FrameImage scaled;
+    frameScaleTo(image, charW * 2, charH * 3, scaled);
+
+    uint32_t palette[16];
+    std::vector<uint8_t> indexed;
+    frameQuantise(scaled, palette, indexed);
+
+    lua_createtable(L, 0, 2);
+
+    lua_createtable(L, 16, 0);
+    for (int i = 0; i < 16; i++) {
+        lua_pushinteger(L, (int) palette[i]);
+        lua_rawseti(L, -2, i + 1);
+    }
+    lua_setfield(L, -2, "palette");
+
+    lua_createtable(L, charH, 0);
+    std::string text((size_t) charW, ' ');
+    std::string fg((size_t) charW, '0');
+    std::string bg((size_t) charW, 'f');
+    int subW = charW * 2;
+
+    for (int cy = 0; cy < charH; cy++) {
+        for (int cx = 0; cx < charW; cx++) {
+            // The six subpixels of this cell, in teletext bit order.
+            uint8_t cell[6];
+            for (int i = 0; i < 6; i++) {
+                int sx = cx * 2 + (i % 2);
+                int sy = cy * 3 + (i / 2);
+                cell[i] = indexed[(size_t) sy * subW + sx];
+            }
+
+            // Choose the two most frequent colours as foreground/background.
+            int counts[16] = {};
+            for (auto c : cell) counts[c]++;
+            int first = 0, second = -1;
+            for (int i = 1; i < 16; i++) {
+                if (counts[i] > counts[first]) first = i;
+            }
+            for (int i = 0; i < 16; i++) {
+                if (i != first && counts[i] > 0 && (second < 0 || counts[i] > counts[second])) second = i;
+            }
+            if (second < 0) second = first;
+
+            // Assign each subpixel to the nearer of the two, building the
+            // teletext bit pattern.
+            int bits = 0;
+            for (int i = 0; i < 6; i++) {
+                auto c = cell[i];
+                bool isFirst = c == first
+                    || (c != second && frameColourDistance(palette[c], palette[first]) <= frameColourDistance(palette[c], palette[second]));
+                if (isFirst) bits |= 1 << i;
+            }
+
+            // Teletext characters encode five subpixels plus an inversion:
+            // if the bottom-right subpixel is set, invert and swap colours.
+            int cellFg = first, cellBg = second;
+            if (bits & 0x20) {
+                bits = ~bits & 0x3F;
+                cellFg = second;
+                cellBg = first;
+            }
+
+            text[(size_t) cx] = (char) (0x80 + (bits & 0x1F));
+            fg[(size_t) cx] = HEX_DIGITS[cellFg];
+            bg[(size_t) cx] = HEX_DIGITS[cellBg];
+        }
+
+        lua_createtable(L, 3, 0);
+        lua_pushlstring(L, text.data(), text.size());
+        lua_rawseti(L, -2, 1);
+        lua_pushlstring(L, fg.data(), fg.size());
+        lua_rawseti(L, -2, 2);
+        lua_pushlstring(L, bg.data(), bg.size());
+        lua_rawseti(L, -2, 3);
+        lua_rawseti(L, -2, cy + 1);
+    }
+    lua_setfield(L, -2, "lines");
+
+    return 1;
+}
+
+// _CC_NATIVE_FRAMES.scale(data, width, height, format, targetW, targetH) -> string
+static int framesScale(lua_State* L) {
+    size_t len;
+    const char* data = luaL_checklstring(L, 1, &len);
+    int width = (int) luaL_checkinteger(L, 2);
+    int height = (int) luaL_checkinteger(L, 3);
+    const char* format = luaL_checkstring(L, 4);
+    int targetW = (int) luaL_checkinteger(L, 5);
+    int targetH = (int) luaL_checkinteger(L, 6);
+
+    if (width < 1 || height < 1 || width > 4096 || height > 4096) luaL_error(L, "Frame size out of range");
+    if (targetW < 1 || targetH < 1 || targetW > 4096 || targetH > 4096) luaL_error(L, "Target size out of range");
+
+    FrameImage image;
+    if (!frameDecode(data, len, width, height, format, image)) {
+        luaL_error(L, "Malformed frame (bad format or too short)");
+    }
+
+    FrameImage scaled;
+    frameScaleTo(image, targetW, targetH, scaled);
+
+    // Always emit rgb888: precision is already paid for.
+    lua_pushlstring(L, reinterpret_cast<const char*>(scaled.rgb.data()), scaled.rgb.size());
+    return 1;
+}
+
+// _CC_NATIVE_FRAMES.get(data, width, height, format, x, y) -> r, g, b
+static int framesGet(lua_State* L) {
+    size_t len;
+    const char* data = luaL_checklstring(L, 1, &len);
+    int width = (int) luaL_checkinteger(L, 2);
+    int height = (int) luaL_checkinteger(L, 3);
+    const char* format = luaL_checkstring(L, 4);
+    int x = (int) luaL_checkinteger(L, 5);
+    int y = (int) luaL_checkinteger(L, 6);
+
+    if (x < 1 || x > width || y < 1 || y > height) luaL_error(L, "Position out of bounds");
+
+    size_t index = (size_t) (y - 1) * width + (x - 1);
+    if (strcmp(format, "rgb332") == 0) {
+        if (len <= index) luaL_error(L, "Malformed frame (too short)");
+        uint8_t v = (uint8_t) data[index];
+        lua_pushinteger(L, ((v >> 5) & 7) * 255 / 7);
+        lua_pushinteger(L, ((v >> 2) & 7) * 255 / 7);
+        lua_pushinteger(L, (v & 3) * 255 / 3);
+        return 3;
+    }
+    if (strcmp(format, "rgb888") == 0) {
+        if (len < (index + 1) * 3) luaL_error(L, "Malformed frame (too short)");
+        const uint8_t* p = reinterpret_cast<const uint8_t*>(data) + index * 3;
+        lua_pushinteger(L, p[0]);
+        lua_pushinteger(L, p[1]);
+        lua_pushinteger(L, p[2]);
+        return 3;
+    }
+    luaL_error(L, "Unknown frame format '%s'", format);
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
 // Native redstone (redstone/rs API)
 // ---------------------------------------------------------------------------
 static const char* SIDE_NAMES[6] = { "bottom", "top", "back", "front", "right", "left" };
@@ -2674,10 +3621,28 @@ JNIEXPORT jlong JNICALL Java_dan200_computercraft_core_lua_luau_LuauNative_creat
     lua_setglobal(L, "_CC_NATIVE_GFX");
 
     // Native textutils fast paths.
-    lua_createtable(L, 0, 1);
+    lua_createtable(L, 0, 5);
     lua_pushcfunction(L, textutilsSerialize, "textutils.serialize");
     lua_setfield(L, -2, "serialize");
+    lua_pushcfunction(L, textutilsSerializeJSON, "textutils.serializeJSON");
+    lua_setfield(L, -2, "serializeJSON");
+    lua_pushcfunction(L, textutilsUnserializeJSON, "textutils.unserializeJSON");
+    lua_setfield(L, -2, "unserializeJSON");
+    lua_pushcfunction(L, textutilsCompress, "textutils.compress");
+    lua_setfield(L, -2, "compress");
+    lua_pushcfunction(L, textutilsDecompress, "textutils.decompress");
+    lua_setfield(L, -2, "decompress");
     lua_setglobal(L, "_CC_NATIVE_TEXTUTILS");
+
+    // Native frame renderer.
+    lua_createtable(L, 0, 3);
+    lua_pushcfunction(L, framesRender, "frames.render");
+    lua_setfield(L, -2, "render");
+    lua_pushcfunction(L, framesScale, "frames.scale");
+    lua_setfield(L, -2, "scale");
+    lua_pushcfunction(L, framesGet, "frames.get");
+    lua_setfield(L, -2, "get");
+    lua_setglobal(L, "_CC_NATIVE_FRAMES");
 
     // Emulate Lua 5.2's _ENV for chunks running in the default environment.
     // Chunks loaded with a custom environment get their own _ENV field (see

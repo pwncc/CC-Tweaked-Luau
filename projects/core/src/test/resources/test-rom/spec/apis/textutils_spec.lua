@@ -348,4 +348,47 @@ describe("The textutils library", function()
             expect.error(textutils.complete, "", false):eq("bad argument #2 (table expected, got boolean)")
         end)
     end)
+
+    describe("textutils.compress", function()
+        it("validates arguments", function()
+            textutils.compress("")
+            expect.error(textutils.compress, nil):eq("bad argument #1 (string expected, got nil)")
+            expect.error(textutils.decompress, nil):eq("bad argument #1 (string expected, got nil)")
+        end)
+
+        it("round trips an empty string", function()
+            expect(textutils.decompress(textutils.compress(""))):eq("")
+        end)
+
+        it("round trips plain text", function()
+            local text = "the quick brown fox jumps over the lazy dog"
+            expect(textutils.decompress(textutils.compress(text))):eq(text)
+        end)
+
+        it("round trips highly repetitive data", function()
+            local text = ("hello, world! "):rep(500)
+            local compressed = textutils.compress(text)
+            expect(textutils.decompress(compressed)):eq(text)
+        end)
+
+        it("round trips binary data", function()
+            local bytes = {}
+            for i = 1, 4096 do bytes[i] = string.char((i * 37 + i % 13) % 256) end
+            local text = table.concat(bytes) .. ("\0\1\2\3"):rep(100) .. "\255\254"
+            expect(textutils.decompress(textutils.compress(text))):eq(text)
+        end)
+
+        it("decompresses a stored (CCZ0) stream", function()
+            -- The portable fallback format: any runtime must accept it.
+            local text = "stored, not compressed"
+            local stored = "CCZ0" .. string.char(#text % 256, 0, 0, 0) .. text
+            expect(textutils.decompress(stored)):eq(text)
+        end)
+
+        it("rejects invalid data", function()
+            expect.error(textutils.decompress, "not compressed"):eq("Invalid compressed data")
+            expect.error(textutils.decompress, "CCZ9AAAAxx"):eq("Invalid compressed data")
+            expect.error(textutils.decompress, "CCZ1"):eq("Invalid compressed data")
+        end)
+    end)
 end)

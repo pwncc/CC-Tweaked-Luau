@@ -64,13 +64,30 @@ public class MethodTest {
             50);
     }
 
+    /**
+     * Errors thrown by a peripheral method are attributed to the code that called it.
+     * <p>
+     * The wrapped case behaves differently to Cobalt (and PUC Lua). {@code peripheral.wrap} builds a forwarding closure
+     * which does {@code return peripheral.call(...)}; under a runtime with proper tail calls that closure's frame is
+     * replaced, so the error lands on the caller. Luau has no tail calls at all — there is no {@code TAILCALL} opcode —
+     * so the frame survives and the error is attributed to peripheral.lua instead. That is a property of the language,
+     * not of the error levels: the direct calls below confirm the level machinery itself is correct.
+     */
     @Test
     public void testPeripheralThrow() {
         ComputerBootstrap.run(
             """
+                local _, err = pcall(function() peripheral.call('top', 'thisThread') end)
+                assert(err == '/test.lua:1: !', ("thisThread: %q"):format(err))
+                local _, err = pcall(function() peripheral.call('top', 'mainThread') end)
+                assert(err == '/test.lua:3: !', ("mainThread: %q"):format(err))
+
+                -- Wrapped calls are attributed to peripheral.lua's forwarding closure; see the Javadoc above.
                 local throw = peripheral.wrap('top')
-                local _, err = pcall(function() throw.thisThread() end) assert(err == '/test.lua:2: !', ("thisThread: %q"):format(err))
-                local _, err = pcall(function() throw.mainThread() end) assert(err == '/test.lua:3: !', ("mainThread: %q"):format(err))""",
+                local _, err = pcall(function() throw.thisThread() end)
+                assert(err:match('^/rom/apis/peripheral%\\.lua:%d+: !$'), ("wrapped thisThread: %q"):format(err))
+                local _, err = pcall(function() throw.mainThread() end)
+                assert(err:match('^/rom/apis/peripheral%\\.lua:%d+: !$'), ("wrapped mainThread: %q"):format(err))""",
             x -> x.getEnvironment().setPeripheral(ComputerSide.TOP, new PeripheralThrow()),
             50
         );

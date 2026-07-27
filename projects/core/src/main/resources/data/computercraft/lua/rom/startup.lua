@@ -49,6 +49,7 @@ local function completePastebinPut(shell, text, previous)
 end
 
 shell.setCompletionFunction("rom/programs/alias.lua", completion.build(nil, completion.program))
+shell.setCompletionFunction("rom/programs/cctv.lua", completion.build({ completion.choice, { "serve ", "watch ", "list" } }))
 shell.setCompletionFunction("rom/programs/cd.lua", completion.build(completion.dir))
 shell.setCompletionFunction("rom/programs/clear.lua", completion.build({ completion.choice, { "screen", "palette", "all" } }))
 shell.setCompletionFunction("rom/programs/copy.lua", completion.build(

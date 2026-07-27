@@ -171,11 +171,24 @@ public final class LuauMachine implements ILuaMachine {
 
     /**
      * Determine whether the Luau runtime is available on this platform.
+     * <p>
+     * This is for callers that must tolerate its absence, such as tests that skip themselves. Anything that needs a
+     * working runtime should call {@link #checkAvailable()} instead.
      *
      * @return Whether {@link LuauMachine}s can be created.
      */
     public static boolean isAvailable() {
         return LuauNative.isAvailable();
+    }
+
+    /**
+     * Ensure the Luau runtime is available, throwing a descriptive error if it is not.
+     *
+     * @throws IllegalStateException If the native library could not be loaded.
+     * @see LuauNative#checkAvailable()
+     */
+    public static void checkAvailable() {
+        LuauNative.checkAvailable();
     }
 
     private void addAPI(ILuaAPI api, Map<Object, Object> modules) {

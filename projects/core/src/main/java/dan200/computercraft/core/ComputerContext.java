@@ -13,7 +13,6 @@ import dan200.computercraft.core.computer.computerthread.ComputerScheduler;
 import dan200.computercraft.core.computer.computerthread.ComputerThread;
 import dan200.computercraft.core.computer.mainthread.MainThreadScheduler;
 import dan200.computercraft.core.computer.mainthread.NoWorkMainThreadScheduler;
-import dan200.computercraft.core.lua.CobaltLuaMachine;
 import dan200.computercraft.core.lua.ILuaMachine;
 import dan200.computercraft.core.lua.MachineEnvironment;
 import dan200.computercraft.core.lua.luau.LuauMachine;
@@ -90,13 +89,19 @@ public final class ComputerContext {
     }
 
     /**
-     * Get the default {@link ILuaMachine.Factory}. This is the Luau runtime when its native library is available on
-     * the current platform, and the (pure-Java) Cobalt runtime otherwise.
+     * Get the default {@link ILuaMachine.Factory}, which is always the Luau runtime.
+     * <p>
+     * There is deliberately no fallback to the (pure-Java) Cobalt runtime. The two are not interchangeable — Luau
+     * accepts syntax Cobalt cannot parse, and programs written for one may fail or misbehave on the other — so quietly
+     * substituting Cobalt would turn an unsupported platform into computers that break at boot for no visible reason.
+     * A missing native library is a fatal, startup-time error instead.
      *
      * @return The default Lua machine factory.
+     * @throws IllegalStateException If the Luau native library is not available on this platform.
      */
     public static ILuaMachine.Factory defaultLuaFactory() {
-        return LuauMachine.isAvailable() ? LuauMachine::new : CobaltLuaMachine::new;
+        LuauMachine.checkAvailable();
+        return LuauMachine::new;
     }
 
     /**
