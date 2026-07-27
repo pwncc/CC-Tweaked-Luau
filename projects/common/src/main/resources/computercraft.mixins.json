@@ -10,6 +10,7 @@
         "CameraChunkMapMixin",
         "CameraPlayerListMixin",
         "CameraServerLevelMixin",
+        "CompatSableTrackingMixin",
         "DataFixersMixin",
         "ItemStackComponentizationFixMixin",
         "TrackedEntityMixin",

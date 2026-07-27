@@ -172,6 +172,34 @@ public final class BroadcastChannels {
     }
 
     /**
+     * Whether a player is currently receiving a camera broadcast from near a position in <em>their own</em>
+     * level. Sable's structure tracking uses this to keep a physics structure synced to players who watch it
+     * through a camera from beyond normal tracking range - a rocket must not vanish out of its own camera view.
+     *
+     * @param viewer The player to check.
+     * @param x      The position's x coordinate (typically a structure's origin).
+     * @param y      The position's y coordinate.
+     * @param z      The position's z coordinate.
+     * @return Whether the player watches a live camera near that position.
+     */
+    public static boolean isWatchingNear(ServerPlayer viewer, double x, double y, double z) {
+        BroadcastChannels instance;
+        synchronized (instances) {
+            instance = instances.get(viewer.server);
+        }
+        if (instance == null) return false;
+
+        var intent = instance.viewerIntents.get(viewer);
+        if (intent == null) return false;
+        var channel = instance.channels.get(intent.channel());
+        if (channel == null || !channel.receiving.contains(viewer) || channel.camera.isSourceRemoved()) return false;
+        if (channel.camera.cameraLevel() != viewer.level()) return false;
+
+        // Cameras ride anywhere on a structure, so allow a generous radius around its origin.
+        return channel.camera.getViewPosition().distanceToSqr(x, y, z) < 512 * 512;
+    }
+
+    /**
      * Mirror a transient effect packet (particles, level events, block events, block cracking) to the
      * cross-dimension viewers of any camera whose streamed area contains it. Called from mixins on the vanilla
      * broadcast paths; a no-op unless a camera is actually streaming that spot to somebody remote.
