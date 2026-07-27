@@ -274,6 +274,42 @@ public final class BroadcastChannels {
     }
 
     /**
+     * Hold (or release) Sable's force-load ticket on the structure a watched camera rides, so the structure keeps
+     * simulating when it outruns every player. No-op without Sable, or for cameras not riding a structure.
+     *
+     * @param channelId The broadcast channel (the ticket's key).
+     * @param channel   The channel state.
+     * @param camera    The broadcasting camera.
+     * @param wanted    Whether the channel currently has receiving viewers.
+     */
+    private void maintainStructureTicket(int channelId, Channel channel, CameraSource camera, boolean wanted) {
+        var level = camera.cameraLevel();
+        var local = camera.localViewPosition();
+        if (wanted && level != null && local != null) {
+            var structure = SableServerBridge.structureAt(level, local);
+            if (structure == null) {
+                releaseStructureTicket(channelId, channel);
+            } else if (!structure.equals(channel.ticketedStructure)) {
+                releaseStructureTicket(channelId, channel);
+                SableServerBridge.setTicket(level, structure, channelId, true);
+                channel.ticketedStructure = structure;
+                channel.ticketedLevel = level;
+            }
+        } else {
+            releaseStructureTicket(channelId, channel);
+        }
+    }
+
+    private void releaseStructureTicket(int channelId, Channel channel) {
+        if (channel.ticketedStructure == null) return;
+        if (channel.ticketedLevel != null) {
+            SableServerBridge.setTicket(channel.ticketedLevel, channel.ticketedStructure, channelId, false);
+        }
+        channel.ticketedStructure = null;
+        channel.ticketedLevel = null;
+    }
+
+    /**
      * Mirror a transient effect packet (particles, level events, block events, block cracking) to the
      * cross-dimension viewers of any camera whose streamed area contains it. Called from mixins on the vanilla
      * broadcast paths; a no-op unless a camera is actually streaming that spot to somebody remote.
@@ -379,6 +415,7 @@ public final class BroadcastChannels {
     public void removeCamera(int channel, CameraSource camera) {
         var state = channels.get(channel);
         if (state == null || !state.camera.equals(camera)) return;
+        releaseStructureTicket(channel, state);
         channels.remove(channel);
         for (var player : state.viewers.keySet()) {
             ServerNetworking.sendToPlayer(new RemoteViewStopMessage(channel), player);
@@ -420,7 +457,10 @@ public final class BroadcastChannels {
             }
         }
 
-        if (channel.viewers.isEmpty()) return;
+        if (channel.viewers.isEmpty()) {
+            maintainStructureTicket(channelId, channel, camera, false);
+            return;
+        }
 
         // Keep the camera's surroundings loaded while watched. The ticket times out on its own, so we just
         // re-arm it every second.
@@ -470,6 +510,10 @@ public final class BroadcastChannels {
                 );
             }
         }
+
+        // A structure being watched must keep simulating even when it outruns every player: hold Sable's
+        // force-load ticket while the camera aboard it has receiving viewers.
+        maintainStructureTicket(channelId, channel, camera, !channel.receiving.isEmpty());
 
         // Same-dimension viewers get a vanilla chunk-sync zone around the camera, for the full-fidelity renderer.
         // A moving camera may leave a viewer's dimension entirely, so clear the zones of everyone else (a no-op
@@ -940,6 +984,9 @@ public final class BroadcastChannels {
         int ticketCooldown = 0;
         int scanCursor = 0;
         boolean noTransmitLogged = false;
+        /** The physics structure this channel force-loads while watched, if any. */
+        @Nullable UUID ticketedStructure = null;
+        @Nullable ServerLevel ticketedLevel = null;
 
         Channel(CameraSource camera) {
             this.camera = camera;
