@@ -107,6 +107,8 @@ neoForge {
                     "cctest.gametest-report",
                     layout.buildDirectory.file("test-results/runTestClientSelf.xml").getAbsolutePath(),
                 )
+                // -PtestFilter=<substring> runs only matching tests, for iterating on one without the suite.
+                project.findProperty("testFilter")?.let { systemProperty("cctest.filter", it.toString()) }
             }
         }
 

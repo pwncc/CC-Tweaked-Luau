@@ -128,6 +128,7 @@ object TestHooks {
         Printout_Test::class.java,
         Recipe_Test::class.java,
         Relay_Test::class.java,
+        Sable_Flight_Test::class.java,
         Sable_Test::class.java,
         Sequencer_Test::class.java,
         Speaker_Test::class.java,

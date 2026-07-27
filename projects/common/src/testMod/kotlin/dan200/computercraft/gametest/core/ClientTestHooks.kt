@@ -132,8 +132,13 @@ object ClientTestHooks {
 
                 LOG.info("Server ready, starting.")
 
+                // An optional substring filter (-Dcctest.filter=...), for iterating on a single test without
+                // running the whole suite.
+                val filter = System.getProperty("cctest.filter")
+                val functions = GameTestRegistry.getAllTestFunctions()
+                    .filter { filter == null || it.testName.contains(filter) }
                 val tests = GameTestRunner.Builder.fromBatches(
-                    GameTestBatchFactory.fromTestFunction(GameTestRegistry.getAllTestFunctions(), server.overworld()),
+                    GameTestBatchFactory.fromTestFunction(functions, server.overworld()),
                     server.overworld(),
                 )
                     .newStructureSpawner(StructureGridSpawner(TestHooks.getTestOrigin(server), 8, false))
