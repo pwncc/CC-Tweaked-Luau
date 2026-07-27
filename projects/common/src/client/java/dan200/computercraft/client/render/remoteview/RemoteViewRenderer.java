@@ -342,6 +342,13 @@ public final class RemoteViewRenderer implements AutoCloseable {
             levelRenderer.renderLevel(
                 minecraft.getTimer(), false, camera, gameRenderer, gameRenderer.lightTexture(), modelView, projection
             );
+
+            // Screens draw this texture through a blending render type, and sky/fog write fractional alpha -
+            // the picture would be see-through. Force the whole target opaque.
+            RenderSystem.colorMask(false, false, false, true);
+            target.setClearColor(0f, 0f, 0f, 1f);
+            target.clear(Minecraft.ON_OSX);
+            RenderSystem.colorMask(true, true, true, true);
         } finally {
             if (puppet != null) {
                 minecraft.level = mainLevel;
@@ -605,6 +612,13 @@ public final class RemoteViewRenderer implements AutoCloseable {
         RenderSystem.setShaderFogEnd(fogEnd);
         lightTexture.turnOffLightLayer();
         RenderSystem.setProjectionMatrix(oldProjection, oldSort);
+
+        // As in the live path: force the target opaque, or screens drawing it through a blending render type
+        // show the world through the picture wherever the sky wrote fractional alpha.
+        RenderSystem.colorMask(false, false, false, true);
+        target.setClearColor(0f, 0f, 0f, 1f);
+        target.clear(Minecraft.ON_OSX);
+        RenderSystem.colorMask(true, true, true, true);
         main.bindWrite(true);
     }
 

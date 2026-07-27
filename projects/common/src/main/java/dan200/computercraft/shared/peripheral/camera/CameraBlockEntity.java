@@ -51,6 +51,16 @@ public final class CameraBlockEntity extends BlockEntity implements CameraHolder
      */
     private @Nullable GlobalPos loaderPos;
 
+    /**
+     * Whether this camera has ever been part of a physics structure. When the structure leaves without us -
+     * a dimension warp serialises the sub-level away, leaving this block entity behind in the abandoned plot,
+     * which our own chunk loader would otherwise keep alive forever - the camera must step aside: stop pumping,
+     * release the chunk loader, and free the channel for the copy of itself that now lives wherever the
+     * structure went.
+     */
+    private boolean wasOnStructure = false;
+    private boolean orphaned = false;
+
     public CameraBlockEntity(BlockEntityType<CameraBlockEntity> type, BlockPos pos, BlockState state) {
         super(type, pos, state);
     }
@@ -61,6 +71,17 @@ public final class CameraBlockEntity extends BlockEntity implements CameraHolder
 
     void serverTick() {
         if (channel != NO_CHANNEL && getLevel() instanceof ServerLevel level) {
+            if (orphaned) return;
+            if (SableSupport.poseAt(level, Vec3.atCenterOf(getBlockPos())) != null) {
+                wasOnStructure = true;
+            } else if (wasOnStructure) {
+                // The structure warped away without us: the block entity that replaced this camera at the
+                // destination takes over the broadcast (adopting the channel once this one lets go).
+                orphaned = true;
+                stopBroadcast();
+                return;
+            }
+
             var here = GlobalPos.of(level.dimension(), getBlockPos().immutable());
             if (!here.equals(loaderPos)) {
                 if (loaderPos != null) CameraChunkLoader.remove(level.getServer(), loaderPos);
@@ -207,7 +228,7 @@ public final class CameraBlockEntity extends BlockEntity implements CameraHolder
 
     @Override
     public boolean isSourceRemoved() {
-        return isRemoved();
+        return isRemoved() || orphaned;
     }
 
     @Override
