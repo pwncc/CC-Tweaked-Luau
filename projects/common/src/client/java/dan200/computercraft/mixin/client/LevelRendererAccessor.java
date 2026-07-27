@@ -9,6 +9,7 @@ import net.minecraft.client.renderer.LevelRenderer;
 import org.jspecify.annotations.Nullable;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.gen.Accessor;
+import org.spongepowered.asm.mixin.gen.Invoker;
 
 /**
  * Lets the camera renderer temporarily disable the entity glow-outline pipeline. Clearing the (window-sized)
@@ -23,4 +24,7 @@ public interface LevelRendererAccessor {
 
     @Accessor("entityTarget")
     void computercraft$setEntityTarget(@Nullable RenderTarget target);
+
+    @Invoker("setSectionDirty")
+    void computercraft$setSectionDirty(int x, int y, int z, boolean important);
 }

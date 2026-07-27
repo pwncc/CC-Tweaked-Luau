@@ -237,13 +237,18 @@ public final class RemoteViewRenderer implements AutoCloseable {
         if (Minecraft.useShaderTransparency()) return computercraft$fallback("fabulous graphics is enabled");
 
         // Same-dimension views render the viewer's own world (the camera's surroundings are chunk-synced into
-        // it); cross-dimension views render their streamed puppet level with its own dedicated renderer.
+        // it); cross-dimension views render their streamed puppet level. Both use a dedicated renderer: the
+        // player's own LevelRenderer anchors its section grid and occlusion graph to a single viewpoint, so
+        // sharing it makes the two passes re-anchor and recompile sections against each other every frame -
+        // terrain flickers in both views once the camera is far from the player.
         ClientLevel level;
         LevelRenderer levelRenderer;
         PuppetLevel puppet = null;
         if (minecraft.level.dimension().location().equals(config.dimension())) {
             level = minecraft.level;
-            levelRenderer = minecraft.levelRenderer;
+            var local = view.local(minecraft.level);
+            local.moveTo(view.posePosition());
+            levelRenderer = local.renderer();
         } else {
             puppet = view.puppet();
             if (puppet == null || !puppet.ready()) {

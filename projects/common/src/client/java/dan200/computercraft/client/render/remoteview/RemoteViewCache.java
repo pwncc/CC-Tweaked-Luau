@@ -320,6 +320,7 @@ public final class RemoteViewCache {
         private @Nullable RemoteViewRenderer renderer;
         @Nullable PuppetLevel puppet;
         private boolean puppetBroken = false;
+        private @Nullable LocalRenderer local;
 
         /** How long a pose update is interpolated over: one server tick, so moving cameras glide. */
         private static final long POSE_LERP_NANOS = 50_000_000L;
@@ -437,6 +438,22 @@ public final class RemoteViewCache {
         }
 
         /**
+         * Get (creating on demand) the dedicated renderer of a same-dimension view. The player's own renderer
+         * cannot be shared: its section grid can only be anchored to one viewpoint at a time.
+         *
+         * @param level The viewer's current level.
+         * @return The view's dedicated same-dimension renderer.
+         */
+        LocalRenderer local(net.minecraft.client.multiplayer.ClientLevel level) {
+            if (local != null && local.level() != level) {
+                local.close();
+                local = null;
+            }
+            if (local == null) local = LocalRenderer.create(level, config.cameraPos());
+            return local;
+        }
+
+        /**
          * Get (creating on demand) the puppet level of a cross-dimension view.
          *
          * @return The view's puppet level, or {@code null} for same-dimension views (or if creation failed).
@@ -516,6 +533,25 @@ public final class RemoteViewCache {
                 puppet.close();
                 puppet = null;
             }
+            if (local != null) {
+                local.close();
+                local = null;
+            }
+        }
+    }
+
+    /**
+     * Mirror a section dirty-mark from the player's level renderer to every same-dimension view's dedicated
+     * renderer, so block and light changes recompile in camera views too.
+     *
+     * @param x         The section's x coordinate.
+     * @param y         The section's y coordinate.
+     * @param z         The section's z coordinate.
+     * @param important Whether the section should recompile synchronously.
+     */
+    public static void forwardSectionDirty(int x, int y, int z, boolean important) {
+        for (var view : views.values()) {
+            if (view.local != null) view.local.setSectionDirty(x, y, z, important);
         }
     }
 

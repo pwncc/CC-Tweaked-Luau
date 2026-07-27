@@ -17,6 +17,7 @@
     ],
     "client": [
         "client.CameraLevelRendererMixin",
+        "client.CameraSectionDirtyMixin",
         "client.ClientChunkCacheMixin",
         "client.GameRendererAccessor",
         "client.LevelRendererAccessor",
