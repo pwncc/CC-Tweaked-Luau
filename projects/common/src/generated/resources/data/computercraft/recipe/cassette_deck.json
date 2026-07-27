@@ -1,0 +1,7 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "redstone",
+  "key": {"#": {"tag": "c:ingots/iron"}, "H": {"item": "minecraft:hopper"}, "R": {"tag": "c:dusts/redstone"}},
+  "pattern": ["###", "#H#", "#R#"],
+  "result": {"count": 1, "id": "computercraft:cassette_deck"}
+}

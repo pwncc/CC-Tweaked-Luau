@@ -1,0 +1,13 @@
+{
+  "type": "computercraft:transform_shaped",
+  "category": "redstone",
+  "function": [{"type": "computercraft:copy_components", "from": {"item": "computercraft:computer_advanced"}}],
+  "key": {
+    "C": {"item": "computercraft:computer_advanced"},
+    "G": {"tag": "c:glass_panes"},
+    "I": {"tag": "c:ingots/iron"},
+    "R": {"tag": "c:dusts/redstone"}
+  },
+  "pattern": ["GGG", "ICI", "IRI"],
+  "result": {"count": 1, "id": "computercraft:billboard"}
+}

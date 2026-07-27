@@ -8,9 +8,11 @@ import dan200.computercraft.api.ComputerCraftAPI;
 import dan200.computercraft.api.ComputerCraftTags;
 import dan200.computercraft.api.turtle.ITurtleUpgrade;
 import dan200.computercraft.shared.ModRegistry;
+import dan200.computercraft.shared.turtle.upgrades.TurtleCamera;
 import dan200.computercraft.shared.turtle.upgrades.TurtleCraftingTable;
 import dan200.computercraft.shared.turtle.upgrades.TurtleModem;
 import dan200.computercraft.shared.turtle.upgrades.TurtleSpeaker;
+import dan200.computercraft.shared.turtle.upgrades.TurtleVacuum;
 import net.minecraft.data.worldgen.BootstrapContext;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.resources.ResourceLocation;
@@ -25,6 +27,8 @@ class TurtleUpgradeProvider {
         upgrades.register(vanilla("crafting_table"), new TurtleCraftingTable(new ItemStack(Items.CRAFTING_TABLE)));
         upgrades.register(id("wireless_modem_normal"), new TurtleModem(new ItemStack(ModRegistry.Items.WIRELESS_MODEM_NORMAL.get()), false));
         upgrades.register(id("wireless_modem_advanced"), new TurtleModem(new ItemStack(ModRegistry.Items.WIRELESS_MODEM_ADVANCED.get()), true));
+        upgrades.register(id("vacuum"), new TurtleVacuum(new ItemStack(ModRegistry.Items.VACUUM_NOZZLE.get())));
+        upgrades.register(id("camera"), new TurtleCamera(new ItemStack(ModRegistry.Items.CAMERA.get())));
 
         tool(vanilla("diamond_axe").location(), Items.DIAMOND_AXE).damageMultiplier(6.0f).register(upgrades);
         tool(vanilla("diamond_pickaxe"), Items.DIAMOND_PICKAXE).register(upgrades);

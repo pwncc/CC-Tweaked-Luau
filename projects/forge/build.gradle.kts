@@ -99,6 +99,15 @@ neoForge {
             configureForGameTest()
 
             systemProperty("cctest.tags", "client,common")
+            // -PselfTest makes this run execute the client gametests itself (screenshots land in its run dir),
+            // sidestepping the currently-broken ClientJavaExec wrapper.
+            if (project.hasProperty("selfTest")) {
+                systemProperty("cctest.client", "")
+                systemProperty(
+                    "cctest.gametest-report",
+                    layout.buildDirectory.file("test-results/runTestClientSelf.xml").getAbsolutePath(),
+                )
+            }
         }
 
         register("gametest") {
@@ -129,7 +138,12 @@ configurations {
     // Force a more recent version of ASM, so we're compatible with Java 25.
     configureEach { resolutionStrategy.force(libs.asm) }
 
-    additionalRuntimeClasspath { extendsFrom(jarJar.get()) }
+    additionalRuntimeClasspath {
+        extendsFrom(jarJar.get())
+        // Sable (always present in dev runs) bundles its own copy of the companion; loading ours too makes the
+        // module system reject the duplicate packages. Production Jar-in-Jar dedupes the two instead.
+        exclude(group = "dev.ryanhcode.sable-companion")
+    }
 
     val testAdditionalRuntimeClasspath by registering {
         isCanBeResolved = true
@@ -171,8 +185,10 @@ dependencies {
     "localImplementation"(commonClasses(project(":forge-api")))
     clientImplementation(clientClasses(project(":forge-api")))
 
+    compileOnly(libs.sableCompanion.common)
     jarJar(libs.cobalt)
     jarJar(libs.jzlib)
+    jarJar(libs.sableCompanion.common)
     // We don't jar-in-jar our additional netty dependencies (see the tasks.jarJar configuration), but still want them
     // on the legacy classpath.
     additionalRuntimeClasspath(libs.netty.http) { isTransitive = false }
@@ -192,6 +208,13 @@ dependencies {
     // Ensure our test fixture dependencies are on the classpath
     "testAdditionalRuntimeClasspath"(libs.bundles.kotlin)
     "testAdditionalRuntimeClasspath"(libs.bundles.test)
+    // Sable rides along in dev and gametest runs (as a proper mod, so its classes load in the game layer),
+    // letting the physics-structure camera tests exercise the real thing. Pass -PnoSable to drop it.
+    // The rest of the Create: Cosmonautics stack lives in run/mods (it crashes the synthetic gametest world),
+    // so it loads in the client run only.
+    if (!project.hasProperty("noSable")) {
+        runtimeOnly(files(rootProject.file("libs/sable-neoforge-1.21.1-2.0.3.jar")))
+    }
 
     testFixturesImplementation(testFixtures(project(":core")))
 

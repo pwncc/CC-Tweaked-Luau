@@ -81,6 +81,11 @@ public final class ForgeClientRegistry {
     }
 
     @SubscribeEvent
+    public static void onBlockColours(RegisterColorHandlersEvent.Block event) {
+        ClientRegistry.registerBlockColours(event::register);
+    }
+
+    @SubscribeEvent
     public static void registerMenuScreens(RegisterMenuScreensEvent event) {
         ClientRegistry.registerMenuScreens(event::register);
     }

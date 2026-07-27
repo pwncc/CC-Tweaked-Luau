@@ -1,0 +1,12 @@
+{
+  "type": "minecraft:crafting_shapeless",
+  "category": "redstone",
+  "ingredients": [
+    {"item": "computercraft:disk"},
+    {"tag": "c:ingots/gold"},
+    {"tag": "c:ingots/gold"},
+    {"tag": "c:ingots/gold"},
+    {"tag": "c:ingots/gold"}
+  ],
+  "result": {"count": 1, "id": "computercraft:golden_disk"}
+}

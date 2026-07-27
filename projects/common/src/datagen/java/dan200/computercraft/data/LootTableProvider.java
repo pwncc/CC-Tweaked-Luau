@@ -43,6 +43,7 @@ class LootTableProvider {
 
     private static void registerBlocks(BiConsumer<ResourceKey<LootTable>, LootTable.Builder> add) {
         namedBlockDrop(add, ModRegistry.Blocks.DISK_DRIVE);
+        selfDrop(add, ModRegistry.Blocks.CASSETTE_DECK);
         selfDrop(add, ModRegistry.Blocks.MONITOR_NORMAL);
         selfDrop(add, ModRegistry.Blocks.MONITOR_ADVANCED);
         namedBlockDrop(add, ModRegistry.Blocks.PRINTER);
@@ -51,10 +52,19 @@ class LootTableProvider {
         selfDrop(add, ModRegistry.Blocks.WIRELESS_MODEM_NORMAL);
         selfDrop(add, ModRegistry.Blocks.WIRELESS_MODEM_ADVANCED);
         selfDrop(add, ModRegistry.Blocks.REDSTONE_RELAY);
+        selfDrop(add, ModRegistry.Blocks.REDSTONE_SEQUENCER);
+        selfDrop(add, ModRegistry.Blocks.CAMERA);
+        selfDrop(add, ModRegistry.Blocks.SEISMOGRAPH);
+        selfDrop(add, ModRegistry.Blocks.CONTROLLER);
+        selfDrop(add, ModRegistry.Blocks.CHROMA_LAMP);
+        selfDrop(add, ModRegistry.Blocks.DIVINING_ROD);
 
         computerDrop(add, ModRegistry.Blocks.COMPUTER_NORMAL);
         computerDrop(add, ModRegistry.Blocks.COMPUTER_ADVANCED);
         computerDrop(add, ModRegistry.Blocks.COMPUTER_COMMAND);
+        computerDrop(add, ModRegistry.Blocks.KIOSK);
+        computerDrop(add, ModRegistry.Blocks.NANO_COMPUTER);
+        computerDrop(add, ModRegistry.Blocks.BILLBOARD);
         computerDrop(add, ModRegistry.Blocks.TURTLE_NORMAL);
         computerDrop(add, ModRegistry.Blocks.TURTLE_ADVANCED);
 

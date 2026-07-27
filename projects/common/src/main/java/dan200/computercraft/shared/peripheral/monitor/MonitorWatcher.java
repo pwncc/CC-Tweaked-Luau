@@ -7,6 +7,7 @@ package dan200.computercraft.shared.peripheral.monitor;
 import dan200.computercraft.shared.computer.terminal.TerminalState;
 import dan200.computercraft.shared.config.Config;
 import dan200.computercraft.shared.network.client.MonitorClientMessage;
+import dan200.computercraft.shared.network.client.PixelDisplayMessage;
 import dan200.computercraft.shared.network.server.ServerNetworking;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
@@ -36,6 +37,14 @@ public final class MonitorWatcher {
         // monitor data to the player.
         for (var te : chunk.getBlockEntities().values()) {
             if (!(te instanceof MonitorBlockEntity monitor)) continue;
+
+            // A monitor in graphics mode also needs its pixels pushed to the new watcher.
+            if (monitor.isOrigin()) {
+                var graphics = monitor.getGraphics();
+                if (graphics != null) {
+                    ServerNetworking.sendToPlayer(PixelDisplayMessage.of(monitor.getBlockPos(), graphics), player);
+                }
+            }
 
             var serverMonitor = getMonitor(monitor);
             if (serverMonitor == null || monitor.enqueued) continue;

@@ -1,0 +1,7 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "redstone",
+  "key": {"#": {"item": "minecraft:stone"}, "D": {"tag": "c:dyes"}, "L": {"item": "minecraft:redstone_lamp"}},
+  "pattern": ["###", "#L#", "#D#"],
+  "result": {"count": 1, "id": "computercraft:chroma_lamp"}
+}

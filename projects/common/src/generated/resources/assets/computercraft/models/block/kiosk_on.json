@@ -1,0 +1,9 @@
+{
+  "parent": "computercraft:block/computer_on",
+  "textures": {
+    "cursor": "computercraft:block/computer_on",
+    "front": "computercraft:block/kiosk_front",
+    "side": "computercraft:block/kiosk_side",
+    "top": "computercraft:block/kiosk_top"
+  }
+}

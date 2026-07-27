@@ -14,7 +14,10 @@ import com.mojang.math.Axis;
 import dan200.computercraft.annotations.ForgeOverride;
 import dan200.computercraft.client.FrameInfo;
 import dan200.computercraft.client.integration.ShaderMod;
+import dan200.computercraft.client.render.PixelDisplays;
 import dan200.computercraft.client.render.RenderTypes;
+import dan200.computercraft.client.render.remoteview.RemoteViewCache;
+import dan200.computercraft.client.render.remoteview.RemoteViewRenderer;
 import dan200.computercraft.client.render.text.DirectFixedWidthFontRenderer;
 import dan200.computercraft.client.render.text.FixedWidthFontRenderer;
 import dan200.computercraft.client.render.vbo.DirectBuffers;
@@ -26,7 +29,10 @@ import dan200.computercraft.shared.peripheral.monitor.ClientMonitor;
 import dan200.computercraft.shared.peripheral.monitor.MonitorBlockEntity;
 import dan200.computercraft.shared.peripheral.monitor.MonitorRenderer;
 import dan200.computercraft.shared.util.DirectionUtil;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.renderer.LightTexture;
 import net.minecraft.client.renderer.MultiBufferSource;
+import net.minecraft.client.renderer.RenderType;
 import net.minecraft.client.renderer.blockentity.BlockEntityRenderer;
 import net.minecraft.client.renderer.blockentity.BlockEntityRendererProvider;
 import net.minecraft.world.phys.AABB;
@@ -64,7 +70,7 @@ public class MonitorBlockEntityRenderer implements BlockEntityRenderer<MonitorBl
         var originTerminal = monitor.getOriginClientMonitor();
         if (originTerminal == null) return;
 
-        var origin = originTerminal.getOrigin();
+        var origin = (MonitorBlockEntity) originTerminal.getOrigin();
         var renderState = originTerminal.getRenderState(MonitorRenderState::new);
         var monitorPos = monitor.getBlockPos();
 
@@ -106,6 +112,22 @@ public class MonitorBlockEntityRenderer implements BlockEntityRenderer<MonitorBl
         var xSize = origin.getWidth() - 2.0 * (MonitorBlockEntity.RENDER_MARGIN + MonitorBlockEntity.RENDER_BORDER);
         var ySize = origin.getHeight() - 2.0 * (MonitorBlockEntity.RENDER_MARGIN + MonitorBlockEntity.RENDER_BORDER);
 
+        // A Lua-owned pixel buffer takes priority over everything else.
+        var pixelTexture = PixelDisplays.get(originPos);
+        if (pixelTexture != null) {
+            if (!ShaderMod.get().isRenderingShadowPass()) {
+                drawViewQuad(transform, bufferSource, pixelTexture, (float) xSize, (float) ySize);
+            }
+            transform.popPose();
+            return;
+        }
+
+        // A monitor tuned to a camera channel shows the live view rather than its terminal.
+        if (renderRemoteView(origin, transform, bufferSource, (float) xSize, (float) ySize)) {
+            transform.popPose();
+            return;
+        }
+
         // Draw the contents
         var terminal = originTerminal.getTerminal();
         if (terminal != null && !ShaderMod.get().isRenderingShadowPass()) {
@@ -129,6 +151,72 @@ public class MonitorBlockEntityRenderer implements BlockEntityRenderer<MonitorBl
                 (float) (xSize + 2 * MARGIN), (float) -(ySize + MARGIN * 2)
             );
         }
+
+        transform.popPose();
+    }
+
+    /**
+     * Draw the camera view a monitor is tuned to, if any.
+     *
+     * @param origin       The monitor's origin block entity.
+     * @param transform    The current pose, positioned at the top-left of the monitor's content area.
+     * @param bufferSource The active buffer source.
+     * @param xSize        The width of the content area, in world units.
+     * @param ySize        The height of the content area, in world units.
+     * @return Whether a remote view was drawn (or is pending): when true, the terminal is not drawn.
+     */
+    private static boolean renderRemoteView(MonitorBlockEntity origin, PoseStack transform, MultiBufferSource bufferSource, float xSize, float ySize) {
+        var channel = origin.getViewChannel();
+        if (channel == MonitorBlockEntity.NO_CHANNEL) return false;
+        if (ShaderMod.get().isRenderingShadowPass()) return true;
+
+        var cameraPos = Minecraft.getInstance().gameRenderer.getMainCamera().getPosition();
+        RemoteViewCache.requestView(channel, cameraPos.distanceToSqr(origin.getBlockPos().getCenter()), origin.getBlockPos());
+
+        var view = RemoteViewCache.getView(channel);
+        var texture = view == null ? null : view.renderer().getTexture(RemoteViewRenderer.VIEW_WIDTH, RemoteViewRenderer.VIEW_HEIGHT);
+
+        if (texture == null) {
+            transform.pushPose();
+            transform.scale(1, -1, 1);
+            FixedWidthFontRenderer.drawEmptyTerminal(
+                FixedWidthFontRenderer.toVertexConsumer(transform, bufferSource.getBuffer(RenderTypes.TERMINAL)),
+                -MARGIN, -MARGIN, xSize + 2 * MARGIN, ySize + 2 * MARGIN
+            );
+            RemoteViewRenderer.drawNoSignal(transform, bufferSource, -MARGIN, -MARGIN, xSize + 2 * MARGIN, ySize + 2 * MARGIN);
+            transform.popPose();
+        } else {
+            drawViewQuad(transform, bufferSource, texture, xSize, ySize);
+        }
+        return true;
+    }
+
+    /**
+     * Draw a texture (a camera view, or a pixel buffer) over the monitor's whole screen area.
+     *
+     * @param transform    The current pose, positioned at the top-left of the monitor's content area.
+     * @param bufferSource The active buffer source.
+     * @param texture      The texture to draw. Assumed to store its image bottom-up (as render targets do); pixel
+     *                     buffer textures are uploaded pre-flipped to match.
+     * @param xSize        The width of the content area, in world units.
+     * @param ySize        The height of the content area, in world units.
+     */
+    private static void drawViewQuad(PoseStack transform, MultiBufferSource bufferSource, net.minecraft.resources.ResourceLocation texture, float xSize, float ySize) {
+        transform.pushPose();
+        // Flip into the same y-down frame terminal quads are emitted in, so our quad faces outwards.
+        transform.scale(1, -1, 1);
+        var left = -MARGIN;
+        var top = -MARGIN;
+        var right = xSize + MARGIN;
+        var bottom = ySize + MARGIN;
+
+        var pose = transform.last().pose();
+        var buffer = bufferSource.getBuffer(RenderType.text(texture));
+        // Top-left, bottom-left, bottom-right, top-right; the texture's image is stored bottom-up.
+        buffer.addVertex(pose, left, top, 0).setColor(-1).setUv(0, 1).setLight(LightTexture.FULL_BRIGHT);
+        buffer.addVertex(pose, left, bottom, 0).setColor(-1).setUv(0, 0).setLight(LightTexture.FULL_BRIGHT);
+        buffer.addVertex(pose, right, bottom, 0).setColor(-1).setUv(1, 0).setLight(LightTexture.FULL_BRIGHT);
+        buffer.addVertex(pose, right, top, 0).setColor(-1).setUv(1, 1).setLight(LightTexture.FULL_BRIGHT);
 
         transform.popPose();
     }

@@ -30,6 +30,13 @@ public final class ConfigSpec {
 
     public static final ConfigFile.Value<Integer> computerSpaceLimit;
     public static final ConfigFile.Value<Integer> floppySpaceLimit;
+    public static final ConfigFile.Value<Integer> cassetteCapacity;
+    public static final ConfigFile.Value<Integer> chipSpaceLimit;
+    public static final ConfigFile.Value<Integer> cameraStreamRadius;
+    public static final ConfigFile.Value<Integer> cameraSectionsPerTick;
+    public static final ConfigFile.Value<Integer> cameraScanPerTick;
+    public static final ConfigFile.Value<Boolean> cameraRequireModem;
+    public static final ConfigFile.Value<Integer> cameraDirectRange;
     public static final ConfigFile.Value<Integer> maximumFilesOpen;
     public static final ConfigFile.Value<String> defaultComputerSettings;
     public static final ConfigFile.Value<Boolean> logComputerErrors;
@@ -103,6 +110,47 @@ public final class ConfigSpec {
             floppySpaceLimit = builder
                 .comment("The disk space limit for floppy disks, in bytes.")
                 .define("floppy_space_limit", 125 * 1000);
+
+            cassetteCapacity = builder
+                .comment("The storage capacity of cassette tapes, in bytes.")
+                .defineInRange("cassette_capacity", 8_000_000, 64_000, 64_000_000);
+
+            chipSpaceLimit = builder
+                .comment("The storage capacity of ROM chips (as used by nano computers), in bytes.")
+                .defineInRange("chip_space_limit", 250 * 1000, 1000, 16_000_000);
+
+            cameraStreamRadius = builder
+                .comment("""
+                    The minimum radius (in chunks) of the world area cameras stream and keep loaded. Cameras always
+                    stream at least the server's view distance, so views reach as far as a player standing there
+                    would see; raise this to push them even further.""")
+                .defineInRange("camera_stream_radius", 6, 1, 32);
+
+            cameraRequireModem = builder
+                .comment("""
+                    Whether camera broadcasts need modems to travel: a modem next to (or equipped on) the camera,
+                    and a modem next to the screen. Wired modems on the same cable network carry video privately;
+                    wireless modems use their normal radio range; ender modems reach anywhere, across dimensions.
+                    Disable to let any screen tune into any camera, anywhere.""")
+                .define("camera_require_modem", true);
+
+            cameraDirectRange = builder
+                .comment("""
+                    How close (in blocks) a viewer must be to a camera to watch it without any modems, e.g.
+                    a screen right next to the camera. Set to 0 to always require modems.""")
+                .defineInRange("camera_direct_range", 16, 0, 128);
+
+            cameraScanPerTick = builder
+                .comment("""
+                    How many world sections a broadcasting camera checks for changes each tick.
+                    Higher values make block changes appear in camera views sooner, at a CPU cost.""")
+                .defineInRange("camera_scan_per_tick", 96, 16, 512);
+
+            cameraSectionsPerTick = builder
+                .comment("""
+                    How many world sections a camera sends to each viewer per tick. Higher
+                    values make the picture converge faster, at a bandwidth cost.""")
+                .defineInRange("camera_sections_per_tick", 12, 1, 64);
 
             uploadMaxSize = builder
                 .comment("""

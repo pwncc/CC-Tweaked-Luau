@@ -8,12 +8,16 @@ import com.mojang.blaze3d.audio.Channel;
 import com.mojang.blaze3d.vertex.PoseStack;
 import dan200.computercraft.api.turtle.TurtleSide;
 import dan200.computercraft.client.pocket.ClientPocketComputers;
+import dan200.computercraft.client.camera.ClientCameraZones;
 import dan200.computercraft.client.render.CableHighlightRenderer;
+import dan200.computercraft.client.render.PixelDisplays;
 import dan200.computercraft.client.render.PocketItemRenderer;
 import dan200.computercraft.client.render.PrintoutItemRenderer;
 import dan200.computercraft.client.render.monitor.MonitorBlockEntityRenderer;
 import dan200.computercraft.client.render.monitor.MonitorHighlightRenderer;
+import dan200.computercraft.client.render.remoteview.RemoteViewRenderer;
 import dan200.computercraft.client.render.monitor.MonitorRenderState;
+import dan200.computercraft.client.render.remoteview.RemoteViewCache;
 import dan200.computercraft.client.sound.SpeakerManager;
 import dan200.computercraft.shared.CommonHooks;
 import dan200.computercraft.shared.ModRegistry;
@@ -54,16 +58,22 @@ public final class ClientHooks {
 
     public static void onTick() {
         FrameInfo.onTick();
+        RemoteViewCache.clientTick();
     }
 
     public static void onRenderTick() {
         PauseAwareTimer.tick(Minecraft.getInstance().isPaused());
         FrameInfo.onRenderTick();
+        // Redraw off-screen camera views before the world renders, where render target switches are safe.
+        RemoteViewRenderer.drainPending();
     }
 
     public static void onWorldUnload() {
         MonitorRenderState.destroyAll();
         SpeakerManager.reset();
+        RemoteViewCache.clear();
+        PixelDisplays.clear();
+        ClientCameraZones.clear();
     }
 
     public static void onDisconnect() {

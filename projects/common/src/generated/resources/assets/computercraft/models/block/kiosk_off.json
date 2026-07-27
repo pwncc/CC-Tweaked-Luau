@@ -1,0 +1,8 @@
+{
+  "parent": "minecraft:block/orientable",
+  "textures": {
+    "front": "computercraft:block/kiosk_front",
+    "side": "computercraft:block/kiosk_side",
+    "top": "computercraft:block/kiosk_top"
+  }
+}

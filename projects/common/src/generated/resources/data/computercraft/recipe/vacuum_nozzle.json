@@ -1,0 +1,7 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "redstone",
+  "key": {"E": {"tag": "c:ender_pearls"}, "H": {"item": "minecraft:hopper"}, "I": {"tag": "c:ingots/iron"}},
+  "pattern": [" E ", "IHI", " I "],
+  "result": {"count": 1, "id": "computercraft:vacuum_nozzle"}
+}

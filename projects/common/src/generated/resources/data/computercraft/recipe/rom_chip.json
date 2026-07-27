@@ -1,0 +1,7 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "redstone",
+  "key": {"G": {"tag": "c:ingots/gold"}, "Q": {"item": "minecraft:quartz"}, "R": {"tag": "c:dusts/redstone"}},
+  "pattern": [" R ", "QGQ"],
+  "result": {"count": 1, "id": "computercraft:rom_chip"}
+}

@@ -40,3 +40,9 @@
 
 # Local native build toolchain (portable GCC/Ninja/JDK, downloaded by developers)
 /vendor/tools/
+
+# Local development clutter: session logs, captured frames, and third-party dev-runtime jars.
+/*.log
+/*.png
+/evidence/
+/libs/

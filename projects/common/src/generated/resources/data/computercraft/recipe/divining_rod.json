@@ -1,0 +1,7 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "redstone",
+  "key": {"#": {"item": "minecraft:stone"}, "C": {"item": "minecraft:compass"}, "I": {"tag": "c:ingots/iron"}},
+  "pattern": ["###", "#C#", "#I#"],
+  "result": {"count": 1, "id": "computercraft:divining_rod"}
+}

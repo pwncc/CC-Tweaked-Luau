@@ -1,0 +1,11 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "redstone",
+  "key": {
+    "#": {"item": "minecraft:stone"},
+    "P": {"item": "minecraft:repeater"},
+    "R": {"tag": "c:dusts/redstone"}
+  },
+  "pattern": ["###", "#P#", "#R#"],
+  "result": {"count": 1, "id": "computercraft:redstone_sequencer"}
+}

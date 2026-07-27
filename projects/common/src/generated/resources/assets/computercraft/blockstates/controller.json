@@ -1,0 +1,8 @@
+{
+  "variants": {
+    "facing=east": {"model": "computercraft:block/controller", "y": 90},
+    "facing=north": {"model": "computercraft:block/controller"},
+    "facing=south": {"model": "computercraft:block/controller", "y": 180},
+    "facing=west": {"model": "computercraft:block/controller", "y": 270}
+  }
+}

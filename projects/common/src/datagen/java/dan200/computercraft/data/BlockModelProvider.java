@@ -23,6 +23,7 @@ import net.minecraft.data.models.BlockModelGenerators;
 import net.minecraft.data.models.blockstates.*;
 import net.minecraft.data.models.model.*;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.properties.BlockStateProperties;
 import net.minecraft.world.level.block.state.properties.BooleanProperty;
@@ -33,6 +34,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.function.BiFunction;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 import static net.minecraft.data.models.model.ModelLocationUtils.getModelLocation;
 import static net.minecraft.data.models.model.TextureMapping.getBlockTexture;
@@ -79,6 +81,14 @@ class BlockModelProvider {
         registerComputer(generators, ModRegistry.Blocks.COMPUTER_NORMAL.get());
         registerComputer(generators, ModRegistry.Blocks.COMPUTER_ADVANCED.get());
         registerComputer(generators, ModRegistry.Blocks.COMPUTER_COMMAND.get());
+        registerComputer(generators, ModRegistry.Blocks.KIOSK.get());
+        // The nano computer's textures don't share the block's name, so we must build the texture mapping by hand.
+        registerComputer(generators, ModRegistry.Blocks.NANO_COMPUTER.get(), () -> new TextureMapping()
+            .put(TextureSlot.SIDE, ResourceLocation.fromNamespaceAndPath(ComputerCraftAPI.MOD_ID, "block/nano_side"))
+            .put(TextureSlot.FRONT, ResourceLocation.fromNamespaceAndPath(ComputerCraftAPI.MOD_ID, "block/nano_front"))
+            .put(TextureSlot.TOP, ResourceLocation.fromNamespaceAndPath(ComputerCraftAPI.MOD_ID, "block/nano_top"))
+        );
+        registerComputer(generators, ModRegistry.Blocks.BILLBOARD.get());
 
         registerTurtle(generators, ModRegistry.Blocks.TURTLE_NORMAL.get());
         registerTurtle(generators, ModRegistry.Blocks.TURTLE_ADVANCED.get());
@@ -92,8 +102,20 @@ class BlockModelProvider {
         registerMonitor(generators, ModRegistry.Blocks.MONITOR_ADVANCED.get());
 
         generators.createHorizontallyRotatedBlock(ModRegistry.Blocks.SPEAKER.get(), TexturedModel.ORIENTABLE_ONLY_TOP);
+        generators.createHorizontallyRotatedBlock(ModRegistry.Blocks.CASSETTE_DECK.get(), TexturedModel.ORIENTABLE_ONLY_TOP);
         registerDiskDrive(generators);
         registerPrinter(generators);
+
+        registerFixedOrientable(generators, ModRegistry.Blocks.REDSTONE_SEQUENCER.get());
+        registerFixedOrientable(generators, ModRegistry.Blocks.SEISMOGRAPH.get());
+        // Cameras mount facing any of the six directions, including straight up or down.
+        generators.blockStateOutput.accept(MultiVariantGenerator.multiVariant(
+            ModRegistry.Blocks.CAMERA.get(),
+            Variant.variant().with(VariantProperties.MODEL, TexturedModel.ORIENTABLE_ONLY_TOP.create(ModRegistry.Blocks.CAMERA.get(), generators.modelOutput))
+        ).with(createFacingDispatch()));
+        generators.createHorizontallyRotatedBlock(ModRegistry.Blocks.CONTROLLER.get(), TexturedModel.ORIENTABLE_ONLY_TOP);
+        registerChromaLamp(generators);
+        generators.createTrivialCube(ModRegistry.Blocks.DIVINING_ROD.get());
 
         registerCable(generators);
 
@@ -101,6 +123,7 @@ class BlockModelProvider {
 
         registerTurtleUpgrade(generators, "block/turtle_crafting_table", "block/turtle_crafty_face");
         registerTurtleUpgrade(generators, "block/turtle_speaker", "block/turtle_speaker_face");
+        registerTurtleUpgrade(generators, "block/turtle_camera", "block/camera_front");
         registerTurtleModem(generators, "block/turtle_modem_normal", "block/wireless_modem_normal_face");
         registerTurtleModem(generators, "block/turtle_modem_advanced", "block/wireless_modem_advanced_face");
 
@@ -159,17 +182,21 @@ class BlockModelProvider {
     }
 
     private static void registerComputer(BlockModelGenerators generators, ComputerBlock<?> block) {
+        registerComputer(generators, block, () -> TextureMapping.orientableCube(block));
+    }
+
+    private static void registerComputer(BlockModelGenerators generators, ComputerBlock<?> block, Supplier<TextureMapping> textures) {
         generators.blockStateOutput.accept(MultiVariantGenerator.multiVariant(block)
             .with(createHorizontalFacingDispatch())
             .with(createModelDispatch(ComputerBlock.STATE, state -> switch (state) {
                 case OFF -> ModelTemplates.CUBE_ORIENTABLE.createWithSuffix(
                     block, "_" + state.getSerializedName(),
-                    TextureMapping.orientableCube(block),
+                    textures.get(),
                     generators.modelOutput
                 );
                 case ON, BLINKING -> COMPUTER_ON.createWithSuffix(
                     block, "_" + state.getSerializedName(),
-                    TextureMapping.orientableCube(block).put(CURSOR, ResourceLocation.fromNamespaceAndPath(ComputerCraftAPI.MOD_ID, "block/computer" + state.getTexture())),
+                    textures.get().put(CURSOR, ResourceLocation.fromNamespaceAndPath(ComputerCraftAPI.MOD_ID, "block/computer" + state.getTexture())),
                     generators.modelOutput
                 );
             }))
@@ -355,6 +382,26 @@ class BlockModelProvider {
         }
 
         generators.blockStateOutput.accept(generator);
+    }
+
+    /**
+     * Register an {@linkplain TexturedModel#ORIENTABLE_ONLY_TOP orientable} block which has no facing property, and
+     * so always faces north.
+     *
+     * @param generators The current model generator helper.
+     * @param block      The block to generate the model for.
+     */
+    private static void registerFixedOrientable(BlockModelGenerators generators, Block block) {
+        var model = TexturedModel.ORIENTABLE_ONLY_TOP.create(block, generators.modelOutput);
+        generators.blockStateOutput.accept(MultiVariantGenerator.multiVariant(block, Variant.variant().with(VariantProperties.MODEL, model)));
+    }
+
+    private static void registerChromaLamp(BlockModelGenerators generators) {
+        // The chroma lamp uses a handwritten model, so its faces can specify a tint index.
+        var lamp = ModRegistry.Blocks.CHROMA_LAMP.get();
+        generators.blockStateOutput.accept(MultiVariantGenerator.multiVariant(
+            lamp, Variant.variant().with(VariantProperties.MODEL, getModelLocation(lamp))
+        ));
     }
 
     private static void registerRedstoneControl(BlockModelGenerators generators) {

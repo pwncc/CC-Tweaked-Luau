@@ -23,11 +23,35 @@ import java.util.UUID;
  * The context under which clientbound packets are evaluated.
  */
 public interface ClientNetworkContext {
+    void handleBillboardData(BlockPos pos, TerminalState terminal);
+
     void handleChatTable(TableBuilder table);
 
     void handleComputerTerminal(int containerId, TerminalState terminal);
 
     void handleMonitorData(BlockPos pos, @Nullable TerminalState terminal);
+
+    void handleRemoteViewConfig(RemoteViewConfigMessage config);
+
+    void handleRemoteViewSections(RemoteViewSectionsMessage sections);
+
+    void handleRemoteViewStop(int channel);
+
+    void handleCameraCapture(CameraCaptureMessage message);
+
+    void handlePixelDisplay(PixelDisplayMessage message);
+
+    void handleCameraZones(CameraZonesMessage message);
+
+    void handleRemoteViewEntities(RemoteViewEntitiesMessage message);
+
+    void handleRemoteViewChunk(RemoteViewChunkMessage message);
+
+    void handleRemoteViewEnvironment(RemoteViewEnvironmentMessage message);
+
+    void handleRemoteViewEffect(RemoteViewEffectMessage message);
+
+    void handleControllerOpen(ControllerOpenMessage message);
 
     void handlePlayRecord(BlockPos pos, @Nullable Holder<JukeboxSong> sound);
 

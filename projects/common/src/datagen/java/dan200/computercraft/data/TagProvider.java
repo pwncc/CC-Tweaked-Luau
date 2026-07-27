@@ -31,7 +31,10 @@ class TagProvider {
         tags.tag(ComputerCraftTags.Blocks.COMPUTER).add(
             ModRegistry.Blocks.COMPUTER_NORMAL.get(),
             ModRegistry.Blocks.COMPUTER_ADVANCED.get(),
-            ModRegistry.Blocks.COMPUTER_COMMAND.get()
+            ModRegistry.Blocks.COMPUTER_COMMAND.get(),
+            ModRegistry.Blocks.KIOSK.get(),
+            ModRegistry.Blocks.NANO_COMPUTER.get(),
+            ModRegistry.Blocks.BILLBOARD.get()
         );
         tags.tag(ComputerCraftTags.Blocks.TURTLE).add(ModRegistry.Blocks.TURTLE_NORMAL.get(), ModRegistry.Blocks.TURTLE_ADVANCED.get());
         tags.tag(ComputerCraftTags.Blocks.WIRED_MODEM).add(ModRegistry.Blocks.CABLE.get(), ModRegistry.Blocks.WIRED_MODEM_FULL.get());
@@ -66,10 +69,14 @@ class TagProvider {
         tags.tag(BlockTags.MINEABLE_WITH_PICKAXE).add(
             ModRegistry.Blocks.COMPUTER_NORMAL.get(),
             ModRegistry.Blocks.COMPUTER_ADVANCED.get(),
+            ModRegistry.Blocks.KIOSK.get(),
+            ModRegistry.Blocks.NANO_COMPUTER.get(),
+            ModRegistry.Blocks.BILLBOARD.get(),
             ModRegistry.Blocks.TURTLE_NORMAL.get(),
             ModRegistry.Blocks.TURTLE_ADVANCED.get(),
             ModRegistry.Blocks.SPEAKER.get(),
             ModRegistry.Blocks.DISK_DRIVE.get(),
+            ModRegistry.Blocks.CASSETTE_DECK.get(),
             ModRegistry.Blocks.PRINTER.get(),
             ModRegistry.Blocks.MONITOR_NORMAL.get(),
             ModRegistry.Blocks.MONITOR_ADVANCED.get(),
@@ -77,7 +84,12 @@ class TagProvider {
             ModRegistry.Blocks.WIRELESS_MODEM_ADVANCED.get(),
             ModRegistry.Blocks.WIRED_MODEM_FULL.get(),
             ModRegistry.Blocks.CABLE.get(),
-            ModRegistry.Blocks.REDSTONE_RELAY.get()
+            ModRegistry.Blocks.REDSTONE_RELAY.get(),
+            ModRegistry.Blocks.REDSTONE_SEQUENCER.get(),
+            ModRegistry.Blocks.CAMERA.get(),
+            ModRegistry.Blocks.SEISMOGRAPH.get(),
+            ModRegistry.Blocks.CHROMA_LAMP.get(),
+            ModRegistry.Blocks.DIVINING_ROD.get()
         );
 
         tags.tag(BlockTags.MINEABLE_WITH_AXE).add(ModRegistry.Blocks.LECTERN.get());
@@ -96,7 +108,7 @@ class TagProvider {
         tags.copy(ComputerCraftTags.Blocks.TURTLE, ComputerCraftTags.Items.TURTLE);
         tags.tag(ComputerCraftTags.Items.WIRED_MODEM).add(ModRegistry.Items.WIRED_MODEM.get(), ModRegistry.Items.WIRED_MODEM_FULL.get());
         tags.copy(ComputerCraftTags.Blocks.MONITOR, ComputerCraftTags.Items.MONITOR);
-        tags.tag(ComputerCraftTags.Items.DISKS).add(ModRegistry.Items.DISK.get(), ModRegistry.Items.TREASURE_DISK.get());
+        tags.tag(ComputerCraftTags.Items.DISKS).add(ModRegistry.Items.DISK.get(), ModRegistry.Items.TREASURE_DISK.get(), ModRegistry.Items.GOLDEN_DISK.get());
         tags.tag(ComputerCraftTags.Items.POCKET_COMPUTERS).add(ModRegistry.Items.POCKET_COMPUTER_NORMAL.get(), ModRegistry.Items.POCKET_COMPUTER_ADVANCED.get());
 
         tags.tag(ComputerCraftTags.Items.DYEABLE)
@@ -106,7 +118,8 @@ class TagProvider {
         tags.tag(ItemTags.PIGLIN_LOVED).add(
             ModRegistry.Items.COMPUTER_ADVANCED.get(), ModRegistry.Items.TURTLE_ADVANCED.get(),
             ModRegistry.Items.WIRELESS_MODEM_ADVANCED.get(), ModRegistry.Items.POCKET_COMPUTER_ADVANCED.get(),
-            ModRegistry.Items.MONITOR_ADVANCED.get()
+            ModRegistry.Items.MONITOR_ADVANCED.get(),
+            ModRegistry.Items.KIOSK.get(), ModRegistry.Items.BILLBOARD.get()
         );
 
         // Allow printed books to be placed in bookshelves.

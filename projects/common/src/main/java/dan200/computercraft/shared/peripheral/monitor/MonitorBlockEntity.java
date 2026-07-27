@@ -11,6 +11,9 @@ import dan200.computercraft.api.peripheral.IPeripheral;
 import dan200.computercraft.core.terminal.Terminal;
 import dan200.computercraft.shared.computer.terminal.TerminalState;
 import dan200.computercraft.shared.config.Config;
+import dan200.computercraft.shared.display.PixelBuffer;
+import dan200.computercraft.shared.network.client.PixelDisplayMessage;
+import dan200.computercraft.shared.network.server.ServerNetworking;
 import dan200.computercraft.shared.util.BlockEntityHelpers;
 import dan200.computercraft.shared.util.TickScheduler;
 import net.minecraft.core.BlockPos;
@@ -18,6 +21,7 @@ import net.minecraft.core.Direction;
 import net.minecraft.core.HolderLookup;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.network.protocol.game.ClientboundBlockEntityDataPacket;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.entity.BlockEntityType;
@@ -36,6 +40,9 @@ public class MonitorBlockEntity extends BlockEntity {
     public static final double RENDER_MARGIN = 0.5 / 16.0;
     public static final double RENDER_PIXEL_SCALE = 1.0 / 64.0;
 
+    public static final int NO_CHANNEL = -1;
+
+    private static final String NBT_CHANNEL = "ViewChannel";
     private static final String NBT_X = "XIndex";
     private static final String NBT_Y = "YIndex";
     private static final String NBT_WIDTH = "Width";
@@ -53,6 +60,23 @@ public class MonitorBlockEntity extends BlockEntity {
 
     private @Nullable MonitorPeripheral peripheral;
     private final AttachedComputerSet computers = new AttachedComputerSet();
+
+    /**
+     * The camera channel this monitor shows instead of its terminal, or {@link #NO_CHANNEL}. Only meaningful on
+     * the origin monitor; synced to clients.
+     */
+    private int viewChannel = NO_CHANNEL;
+
+    /**
+     * How often (in ticks) at most the pixel buffer is pushed to clients.
+     */
+    private static final int PIXEL_SYNC_INTERVAL = 4;
+
+    /**
+     * The Lua-owned pixel buffer, when this screen is in graphics mode. Only meaningful on the origin monitor.
+     */
+    private @Nullable PixelBuffer graphics;
+    private long lastPixelSync = Long.MIN_VALUE;
 
     private boolean needsUpdate = false;
     private boolean needsValidating = false;
@@ -103,6 +127,7 @@ public class MonitorBlockEntity extends BlockEntity {
         tag.putInt(NBT_Y, yIndex);
         tag.putInt(NBT_WIDTH, width);
         tag.putInt(NBT_HEIGHT, height);
+        if (viewChannel != NO_CHANNEL) tag.putInt(NBT_CHANNEL, viewChannel);
         super.saveAdditional(tag, registries);
     }
 
@@ -117,6 +142,7 @@ public class MonitorBlockEntity extends BlockEntity {
         yIndex = nbt.getInt(NBT_Y);
         width = nbt.getInt(NBT_WIDTH);
         height = nbt.getInt(NBT_HEIGHT);
+        viewChannel = nbt.contains(NBT_CHANNEL) ? nbt.getInt(NBT_CHANNEL) : NO_CHANNEL;
 
         if (level != null && level.isClientSide) onClientLoad(oldXIndex, oldYIndex);
     }
@@ -131,6 +157,8 @@ public class MonitorBlockEntity extends BlockEntity {
             needsUpdate = false;
             expand();
         }
+
+        if (xIndex == 0 && yIndex == 0) syncPixels();
 
         if (xIndex != 0 || yIndex != 0 || serverMonitor == null) return;
 
@@ -208,7 +236,109 @@ public class MonitorBlockEntity extends BlockEntity {
         nbt.putInt(NBT_Y, yIndex);
         nbt.putInt(NBT_WIDTH, width);
         nbt.putInt(NBT_HEIGHT, height);
+        if (viewChannel != NO_CHANNEL) nbt.putInt(NBT_CHANNEL, viewChannel);
         return nbt;
+    }
+
+    /**
+     * Get the camera channel this monitor shows instead of its terminal, if any. Only meaningful on the origin.
+     *
+     * @return The tuned channel, or {@link #NO_CHANNEL}.
+     */
+    public int getViewChannel() {
+        return viewChannel;
+    }
+
+    /**
+     * Tune the whole monitor (this always applies to the origin) to a camera channel, or back to the terminal.
+     *
+     * @param channel The channel to show, or {@link #NO_CHANNEL} for the terminal.
+     */
+    void setViewChannel(int channel) {
+        var origin = xIndex == 0 && yIndex == 0 ? this : getOrigin();
+        if (origin == null || origin.viewChannel == channel) return;
+        origin.viewChannel = channel;
+        origin.setChanged();
+        BlockEntityHelpers.updateBlock(origin);
+    }
+
+    /**
+     * Get the channel of the whole monitor, resolving to the origin.
+     *
+     * @return The tuned channel, or {@link #NO_CHANNEL}.
+     */
+    int resolveViewChannel() {
+        var origin = xIndex == 0 && yIndex == 0 ? this : getOrigin();
+        return origin == null ? NO_CHANNEL : origin.viewChannel;
+    }
+
+    /**
+     * Enter (or resize) graphics mode: create a Lua-owned pixel buffer on the origin.
+     *
+     * @param width  The buffer width, in pixels.
+     * @param height The buffer height, in pixels.
+     */
+    void setGraphicsMode(int width, int height) {
+        var origin = xIndex == 0 && yIndex == 0 ? this : getOrigin();
+        if (origin == null) return;
+        origin.graphics = new PixelBuffer(width, height);
+        TickScheduler.schedule(origin.tickToken);
+    }
+
+    /**
+     * Leave graphics mode, returning the screen to its terminal (or tuned channel).
+     */
+    void clearGraphicsMode() {
+        var origin = xIndex == 0 && yIndex == 0 ? this : getOrigin();
+        if (origin == null || origin.graphics == null) return;
+        origin.graphics = null;
+        if (origin.getLevel() instanceof ServerLevel level) {
+            ServerNetworking.sendToAllTracking(PixelDisplayMessage.cleared(origin.getBlockPos()), level.getChunkAt(origin.getBlockPos()));
+        }
+    }
+
+    /**
+     * Get the origin's pixel buffer, if in graphics mode.
+     *
+     * @return The pixel buffer.
+     */
+    @Nullable
+    PixelBuffer getGraphics() {
+        var origin = xIndex == 0 && yIndex == 0 ? this : getOrigin();
+        return origin == null ? null : origin.graphics;
+    }
+
+    /**
+     * Whether this is the origin (top-left) monitor of its multiblock.
+     *
+     * @return Whether this monitor is the origin.
+     */
+    boolean isOrigin() {
+        return xIndex == 0 && yIndex == 0;
+    }
+
+    /**
+     * Request a pixel sync soon, e.g. after drawing to the buffer.
+     */
+    void schedulePixelSync() {
+        var origin = xIndex == 0 && yIndex == 0 ? this : getOrigin();
+        if (origin != null) TickScheduler.schedule(origin.tickToken);
+    }
+
+    private void syncPixels() {
+        var graphics = this.graphics;
+        if (graphics == null || !(getLevel() instanceof ServerLevel level)) return;
+        if (!graphics.pollDirty()) return;
+
+        if (level.getGameTime() - lastPixelSync < PIXEL_SYNC_INTERVAL) {
+            // Too soon: stay dirty and try again next tick.
+            graphics.markDirty();
+            TickScheduler.schedule(tickToken);
+            return;
+        }
+
+        lastPixelSync = level.getGameTime();
+        ServerNetworking.sendToAllTracking(PixelDisplayMessage.of(getBlockPos(), graphics), level.getChunkAt(getBlockPos()));
     }
 
     private void onClientLoad(int oldXIndex, int oldYIndex) {

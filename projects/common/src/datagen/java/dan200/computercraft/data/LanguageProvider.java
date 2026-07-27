@@ -71,8 +71,12 @@ public final class LanguageProvider implements DataProvider {
         add(ModRegistry.Items.COMPUTER_NORMAL.get(), "Computer");
         add(ModRegistry.Items.COMPUTER_ADVANCED.get(), "Advanced Computer");
         add(ModRegistry.Items.COMPUTER_COMMAND.get(), "Command Computer");
+        add(ModRegistry.Items.KIOSK.get(), "Kiosk");
+        add(ModRegistry.Items.NANO_COMPUTER.get(), "Nano Computer");
+        add(ModRegistry.Items.BILLBOARD.get(), "Billboard");
 
         add(ModRegistry.Items.DISK_DRIVE.get(), "Disk Drive");
+        add(ModRegistry.Items.CASSETTE_DECK.get(), "Cassette Deck");
         add(ModRegistry.Items.PRINTER.get(), "Printer");
         add(ModRegistry.Items.SPEAKER.get(), "Speaker");
         add(ModRegistry.Items.MONITOR_NORMAL.get(), "Monitor");
@@ -83,6 +87,14 @@ public final class LanguageProvider implements DataProvider {
         add(ModRegistry.Items.CABLE.get(), "Networking Cable");
         add(ModRegistry.Items.WIRED_MODEM_FULL.get(), "Wired Modem");
         add(ModRegistry.Items.REDSTONE_RELAY.get(), "Redstone Relay");
+        add(ModRegistry.Items.REDSTONE_SEQUENCER.get(), "Redstone Sequencer");
+        add(ModRegistry.Items.CAMERA.get(), "Camera");
+        add(ModRegistry.Items.SEISMOGRAPH.get(), "Seismograph");
+        add(ModRegistry.Items.CONTROLLER.get(), "Controller Dock");
+        add("gui.computercraft.control", "You have the controls");
+        add(ModRegistry.Items.CHROMA_LAMP.get(), "Chroma Lamp");
+        add(ModRegistry.Items.DIVINING_ROD.get(), "Divining Rod");
+        add(ModRegistry.Items.VACUUM_NOZZLE.get(), "Vacuum Nozzle");
 
         add(ModRegistry.Items.TURTLE_NORMAL.get(), "Turtle");
         add(ModRegistry.Blocks.TURTLE_NORMAL.get().getDescriptionId() + ".upgraded", "%s Turtle");
@@ -94,6 +106,20 @@ public final class LanguageProvider implements DataProvider {
 
         add(ModRegistry.Items.DISK.get(), "Floppy Disk");
         add(ModRegistry.Items.TREASURE_DISK.get(), "Floppy Disk");
+        add(ModRegistry.Items.GOLDEN_DISK.get(), "Golden Disk");
+        add(ModRegistry.Items.CASSETTE.get(), "Cassette");
+        add(ModRegistry.Items.ROM_CHIP.get(), "ROM Chip");
+        add("gui.computercraft.nano.booting", "Nano computer %s booting (%s)");
+        add("gui.computercraft.nano.running", "Nano computer %s is running (%s)");
+        add("gui.computercraft.nano.no_chip", "no chip");
+        add("gui.computercraft.nano.unlabelled_chip", "unlabelled chip");
+        add("gui.computercraft.nano.chip_installed", "ROM chip installed");
+        add("gui.computercraft.nano.chip_ejected", "ROM chip ejected");
+        add("gui.computercraft.nano.module_installed", "Internal module fitted");
+        add("gui.computercraft.nano.module_ejected", "Internal module removed");
+        add("gui.computercraft.nano.bays_full", "All module bays are full");
+        add("gui.computercraft.nano.shutdown", "Nano computer shut down");
+        add("gui.computercraft.nano.empty", "Nothing to remove");
         add(ModRegistry.Items.PRINTED_PAGE.get(), "Printed Page");
         add(ModRegistry.Items.PRINTED_PAGES.get(), "Printed Pages");
         add(ModRegistry.Items.PRINTED_BOOK.get(), "Printed Book");
@@ -123,6 +149,9 @@ public final class LanguageProvider implements DataProvider {
         add("upgrade.computercraft.wireless_modem_normal.adjective", "Wireless");
         add("upgrade.computercraft.wireless_modem_advanced.adjective", "Ender");
         add("upgrade.computercraft.speaker.adjective", "Noisy");
+        add("upgrade.computercraft.vacuum.adjective", "Vacuum");
+        add("upgrade.computercraft.camera.adjective", "Filming");
+        add("upgrade.computercraft.firework_launcher.adjective", "Festive");
 
         add("chat.computercraft.wired_modem.peripheral_connected", "Peripheral \"%s\" connected to network");
         add("chat.computercraft.wired_modem.peripheral_disconnected", "Peripheral \"%s\" disconnected from network");
@@ -226,6 +255,13 @@ public final class LanguageProvider implements DataProvider {
         // Config options
         addConfigEntry(ConfigSpec.computerSpaceLimit, "Computer space limit (bytes)");
         addConfigEntry(ConfigSpec.floppySpaceLimit, "Floppy Disk space limit (bytes)");
+        addConfigEntry(ConfigSpec.cassetteCapacity, "Cassette capacity (bytes)");
+        addConfigEntry(ConfigSpec.chipSpaceLimit, "ROM chip space limit (bytes)");
+        addConfigEntry(ConfigSpec.cameraStreamRadius, "Camera stream radius (chunks)");
+        addConfigEntry(ConfigSpec.cameraRequireModem, "Cameras require modems");
+        addConfigEntry(ConfigSpec.cameraDirectRange, "Camera direct-view range (blocks)");
+        addConfigEntry(ConfigSpec.cameraSectionsPerTick, "Camera sections streamed per tick");
+        addConfigEntry(ConfigSpec.cameraScanPerTick, "Camera sections scanned for changes per tick");
         addConfigEntry(ConfigSpec.uploadMaxSize, "File upload size limit (bytes)");
         addConfigEntry(ConfigSpec.maximumFilesOpen, "Maximum files open per computer");
         addConfigEntry(ConfigSpec.defaultComputerSettings, "Default Computer settings");

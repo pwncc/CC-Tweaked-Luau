@@ -51,6 +51,7 @@ sodium-fabric = "mc1.21-0.6.0-beta.1-fabric"
 sodium-forge = "mc1.21-0.6.0-beta.1-neoforge"
 mixinExtra = "0.3.5"
 create-forge = "6.0.0-6"
+sableCompanion = "1.6.0"
 create-fabric = "6.0.7.0+mc1.20.1-build.1716"
 
 # Testing
@@ -109,6 +110,8 @@ slf4j = { module = "org.slf4j:slf4j-api", version.ref = "slf4j" }
 create-fabric = { module = "com.simibubi.create:create-fabric-1.20.1", version.ref = "create-fabric" }
 create-forge = { module = "com.simibubi.create:create-1.21.1", version.ref = "create-forge" }
 emi = { module = "dev.emi:emi-xplat-mojmap", version.ref = "emi" }
+sableCompanion-common = { module = "dev.ryanhcode.sable-companion:sable-companion-common-1.21.1", version.ref = "sableCompanion" }
+sableCompanion-fabric = { module = "dev.ryanhcode.sable-companion:sable-companion-fabric-1.21.1", version.ref = "sableCompanion" }
 fabric-api = { module = "net.fabricmc.fabric-api:fabric-api", version.ref = "fabric-api" }
 fabric-junit = { module = "net.fabricmc:fabric-loader-junit", version.ref = "fabric-loader" }
 fabric-loader = { module = "net.fabricmc:fabric-loader", version.ref = "fabric-loader" }

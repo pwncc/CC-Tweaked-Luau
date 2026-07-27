@@ -34,6 +34,11 @@ public final class MountMedia implements IMedia {
      */
     public static final IMedia DISK = new MountMedia("disk", ModRegistry.DataComponents.DISK_ID, true, ConfigSpec.floppySpaceLimit);
 
+    /**
+     * A {@link MountMedia} implementation for {@linkplain ModRegistry.Items#ROM_CHIP ROM chips}.
+     */
+    public static final MountMedia CHIP = new MountMedia("chip", ModRegistry.DataComponents.CHIP_ID, true, ConfigSpec.chipSpaceLimit);
+
     private final String subPath;
     private final Supplier<DataComponentType<NonNegativeId>> id;
     private final boolean createId;

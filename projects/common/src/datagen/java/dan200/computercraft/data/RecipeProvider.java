@@ -290,6 +290,42 @@ final class RecipeProvider extends net.minecraft.data.recipes.RecipeProvider {
             .save(add);
 
         ShapedSpecBuilder
+            .shaped(RecipeCategory.REDSTONE, ModRegistry.Items.KIOSK.get())
+            .pattern("#G#")
+            .pattern("#C#")
+            .pattern("#G#")
+            .define('#', ingredients.goldIngot())
+            .define('G', ingredients.glassPane())
+            .define('C', ModRegistry.Items.COMPUTER_ADVANCED.get())
+            .unlockedBy("has_computer", inventoryChange(ModRegistry.Items.COMPUTER_ADVANCED.get()))
+            .build(x -> new TransformShapedRecipe(x, List.of(new CopyComponents(ModRegistry.Items.COMPUTER_ADVANCED.get()))))
+            .save(add);
+
+        ShapedRecipeBuilder
+            .shaped(RecipeCategory.REDSTONE, ModRegistry.Items.NANO_COMPUTER.get())
+            .pattern("#R#")
+            .pattern("#G#")
+            .pattern("###")
+            .define('#', Items.STONE)
+            .define('R', ingredients.redstone())
+            .define('G', ingredients.glassPane())
+            .unlockedBy("has_redstone", inventoryChange(itemPredicate(ingredients.redstone())))
+            .save(add);
+
+        ShapedSpecBuilder
+            .shaped(RecipeCategory.REDSTONE, ModRegistry.Items.BILLBOARD.get())
+            .pattern("GGG")
+            .pattern("ICI")
+            .pattern("IRI")
+            .define('G', ingredients.glassPane())
+            .define('I', ingredients.ironIngot())
+            .define('C', ModRegistry.Items.COMPUTER_ADVANCED.get())
+            .define('R', ingredients.redstone())
+            .unlockedBy("has_computer", inventoryChange(ModRegistry.Items.COMPUTER_ADVANCED.get()))
+            .build(x -> new TransformShapedRecipe(x, List.of(new CopyComponents(ModRegistry.Items.COMPUTER_ADVANCED.get()))))
+            .save(add);
+
+        ShapedSpecBuilder
             .shaped(RecipeCategory.REDSTONE, ModRegistry.Items.TURTLE_NORMAL.get())
             .pattern("###")
             .pattern("#C#")
@@ -333,6 +369,35 @@ final class RecipeProvider extends net.minecraft.data.recipes.RecipeProvider {
             .define('#', Items.STONE)
             .define('R', ingredients.redstone())
             .unlockedBy("has_computer", inventoryChange(COMPUTER))
+            .save(add);
+
+        ShapedRecipeBuilder
+            .shaped(RecipeCategory.REDSTONE, ModRegistry.Items.CASSETTE_DECK.get())
+            .pattern("###")
+            .pattern("#H#")
+            .pattern("#R#")
+            .define('#', ingredients.ironIngot())
+            .define('H', Items.HOPPER)
+            .define('R', ingredients.redstone())
+            .unlockedBy("has_computer", inventoryChange(COMPUTER))
+            .save(add);
+
+        ShapelessRecipeBuilder
+            .shapeless(RecipeCategory.REDSTONE, ModRegistry.Items.CASSETTE.get())
+            .requires(ingredients.string(), 4)
+            .requires(ingredients.ironIngot())
+            .requires(ingredients.redstone())
+            .unlockedBy("has_deck", inventoryChange(ModRegistry.Items.CASSETTE_DECK.get()))
+            .save(add);
+
+        ShapedRecipeBuilder
+            .shaped(RecipeCategory.REDSTONE, ModRegistry.Items.ROM_CHIP.get())
+            .pattern(" R ")
+            .pattern("QGQ")
+            .define('R', ingredients.redstone())
+            .define('Q', net.minecraft.world.item.Items.QUARTZ)
+            .define('G', ingredients.goldIngot())
+            .unlockedBy("has_nano", inventoryChange(ModRegistry.Items.NANO_COMPUTER.get()))
             .save(add);
 
         ShapedRecipeBuilder
@@ -409,6 +474,90 @@ final class RecipeProvider extends net.minecraft.data.recipes.RecipeProvider {
             .define('#', Items.STONE)
             .define('N', Items.NOTE_BLOCK)
             .define('R', ingredients.redstone())
+            .unlockedBy("has_computer", inventoryChange(COMPUTER))
+            .save(add);
+
+        ShapedRecipeBuilder
+            .shaped(RecipeCategory.REDSTONE, ModRegistry.Items.VACUUM_NOZZLE.get())
+            .pattern(" E ")
+            .pattern("IHI")
+            .pattern(" I ")
+            .define('E', ingredients.enderPearl())
+            .define('I', ingredients.ironIngot())
+            .define('H', Items.HOPPER)
+            .unlockedBy("has_computer", inventoryChange(COMPUTER))
+            .save(add);
+
+        ShapelessRecipeBuilder
+            .shapeless(RecipeCategory.REDSTONE, ModRegistry.Items.GOLDEN_DISK.get())
+            .requires(ModRegistry.Items.DISK.get())
+            .requires(ingredients.goldIngot(), 4)
+            .unlockedBy("has_disk", inventoryChange(ModRegistry.Items.DISK.get()))
+            .save(add);
+
+        ShapedRecipeBuilder
+            .shaped(RecipeCategory.REDSTONE, ModRegistry.Items.REDSTONE_SEQUENCER.get())
+            .pattern("###")
+            .pattern("#P#")
+            .pattern("#R#")
+            .define('#', Items.STONE)
+            .define('P', Items.REPEATER)
+            .define('R', ingredients.redstone())
+            .unlockedBy("has_computer", inventoryChange(COMPUTER))
+            .save(add);
+
+        ShapedRecipeBuilder
+            .shaped(RecipeCategory.REDSTONE, ModRegistry.Items.SEISMOGRAPH.get())
+            .pattern("###")
+            .pattern("#A#")
+            .pattern("#R#")
+            .define('#', Items.STONE)
+            .define('A', Items.AMETHYST_SHARD)
+            .define('R', ingredients.redstone())
+            .unlockedBy("has_computer", inventoryChange(COMPUTER))
+            .save(add);
+
+        ShapedRecipeBuilder
+            .shaped(RecipeCategory.REDSTONE, ModRegistry.Items.CONTROLLER.get())
+            .pattern("###")
+            .pattern("#L#")
+            .pattern("#R#")
+            .define('#', Items.STONE)
+            .define('L', Items.LEVER)
+            .define('R', ingredients.redstone())
+            .unlockedBy("has_computer", inventoryChange(COMPUTER))
+            .save(add);
+
+        ShapedRecipeBuilder
+            .shaped(RecipeCategory.REDSTONE, ModRegistry.Items.CAMERA.get())
+            .pattern("III")
+            .pattern("IOG")
+            .pattern("III")
+            .define('I', Items.IRON_INGOT)
+            .define('O', Items.OBSERVER)
+            .define('G', Items.GLASS_PANE)
+            .unlockedBy("has_observer", inventoryChange(Items.OBSERVER))
+            .save(add);
+
+        ShapedRecipeBuilder
+            .shaped(RecipeCategory.REDSTONE, ModRegistry.Items.CHROMA_LAMP.get())
+            .pattern("###")
+            .pattern("#L#")
+            .pattern("#D#")
+            .define('#', Items.STONE)
+            .define('L', Items.REDSTONE_LAMP)
+            .define('D', ingredients.dye())
+            .unlockedBy("has_computer", inventoryChange(COMPUTER))
+            .save(add);
+
+        ShapedRecipeBuilder
+            .shaped(RecipeCategory.REDSTONE, ModRegistry.Items.DIVINING_ROD.get())
+            .pattern("###")
+            .pattern("#C#")
+            .pattern("#I#")
+            .define('#', Items.STONE)
+            .define('C', Items.COMPASS)
+            .define('I', ingredients.ironIngot())
             .unlockedBy("has_computer", inventoryChange(COMPUTER))
             .save(add);
 

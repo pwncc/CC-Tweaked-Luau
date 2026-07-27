@@ -1,0 +1,8 @@
+{
+  "variants": {
+    "facing=east": {"model": "computercraft:block/cassette_deck", "y": 90},
+    "facing=north": {"model": "computercraft:block/cassette_deck"},
+    "facing=south": {"model": "computercraft:block/cassette_deck", "y": 180},
+    "facing=west": {"model": "computercraft:block/cassette_deck", "y": 270}
+  }
+}

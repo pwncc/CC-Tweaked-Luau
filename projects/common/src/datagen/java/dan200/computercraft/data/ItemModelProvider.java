@@ -33,6 +33,12 @@ public final class ItemModelProvider {
         generators.generateFlatItem(ModRegistry.Items.PRINTED_BOOK.get(), ModelTemplates.FLAT_ITEM);
         generators.generateFlatItem(ModRegistry.Items.PRINTED_PAGE.get(), ModelTemplates.FLAT_ITEM);
         generators.generateFlatItem(ModRegistry.Items.PRINTED_PAGES.get(), ModelTemplates.FLAT_ITEM);
+
+        // The golden disk is deliberately not registered with registerDisk: it is a plain, untinted item model.
+        generators.generateFlatItem(ModRegistry.Items.GOLDEN_DISK.get(), ModelTemplates.FLAT_ITEM);
+        generators.generateFlatItem(ModRegistry.Items.CASSETTE.get(), ModelTemplates.FLAT_ITEM);
+        generators.generateFlatItem(ModRegistry.Items.ROM_CHIP.get(), ModelTemplates.FLAT_ITEM);
+        generators.generateFlatItem(ModRegistry.Items.VACUUM_NOZZLE.get(), ModelTemplates.FLAT_ITEM);
     }
 
     private static void registerPocketComputer(ItemModelGenerators generators, ResourceLocation id, boolean off) {

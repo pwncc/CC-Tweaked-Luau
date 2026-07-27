@@ -2,10 +2,14 @@
   "values": [
     "computercraft:computer_normal",
     "computercraft:computer_advanced",
+    "computercraft:kiosk",
+    "computercraft:nano_computer",
+    "computercraft:billboard",
     "computercraft:turtle_normal",
     "computercraft:turtle_advanced",
     "computercraft:speaker",
     "computercraft:disk_drive",
+    "computercraft:cassette_deck",
     "computercraft:printer",
     "computercraft:monitor_normal",
     "computercraft:monitor_advanced",
@@ -13,6 +17,11 @@
     "computercraft:wireless_modem_advanced",
     "computercraft:wired_modem_full",
     "computercraft:cable",
-    "computercraft:redstone_relay"
+    "computercraft:redstone_relay",
+    "computercraft:redstone_sequencer",
+    "computercraft:camera",
+    "computercraft:seismograph",
+    "computercraft:chroma_lamp",
+    "computercraft:divining_rod"
   ]
 }

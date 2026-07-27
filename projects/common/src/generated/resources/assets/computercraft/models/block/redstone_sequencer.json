@@ -1,0 +1,8 @@
+{
+  "parent": "minecraft:block/orientable",
+  "textures": {
+    "front": "computercraft:block/redstone_sequencer_front",
+    "side": "computercraft:block/redstone_sequencer_side",
+    "top": "computercraft:block/redstone_sequencer_top"
+  }
+}

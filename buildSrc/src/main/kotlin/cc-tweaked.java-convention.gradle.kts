@@ -47,6 +47,13 @@ repositories {
         }
     }
 
+    maven("https://maven.ryanhcode.dev/releases") {
+        name = "RyanHCode"
+        content {
+            includeGroupByRegex("dev\\.ryanhcode.*")
+        }
+    }
+
     val mainMaven = maven("https://maven.squiddev.cc/mirror") {
         name = "SquidDev"
     }

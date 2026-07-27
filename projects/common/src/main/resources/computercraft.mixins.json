@@ -7,8 +7,20 @@
         "defaultRequire": 1
     },
     "mixins": [
+        "CameraChunkMapMixin",
+        "CameraPlayerListMixin",
+        "CameraServerLevelMixin",
         "DataFixersMixin",
         "ItemStackComponentizationFixMixin",
+        "TrackedEntityMixin",
         "V1460Mixin"
+    ],
+    "client": [
+        "client.CameraLevelRendererMixin",
+        "client.ClientChunkCacheMixin",
+        "client.GameRendererAccessor",
+        "client.LevelRendererAccessor",
+        "client.MinecraftAccessor",
+        "client.ParticleEngineAccessor"
     ]
 }

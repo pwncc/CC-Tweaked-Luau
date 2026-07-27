@@ -40,6 +40,8 @@ dependencies {
     compileOnly(libs.mixin)
     compileOnly(libs.mixinExtra)
     compileOnly(libs.bundles.externalMods.common)
+    // Sable physics compat: the companion library no-ops when Sable is absent, so it is safe to call directly.
+    compileOnly(libs.sableCompanion.common)
     clientCompileOnly(variantOf(libs.emi) { classifier("api") })
 
     annotationProcessorEverywhere(libs.autoService)
@@ -53,6 +55,7 @@ dependencies {
     testAnnotationProcessor(libs.jmh.processor)
 
     testModCompileOnly(libs.mixin)
+    testModCompileOnly(libs.sableCompanion.common)
     testModImplementation(testFixtures(project(":core")))
     testModImplementation(testFixtures(project(":common")))
     testModImplementation(libs.bundles.kotlin)

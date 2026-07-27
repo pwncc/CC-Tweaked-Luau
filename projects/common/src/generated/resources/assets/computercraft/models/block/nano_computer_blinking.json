@@ -1,0 +1,9 @@
+{
+  "parent": "computercraft:block/computer_on",
+  "textures": {
+    "cursor": "computercraft:block/computer_blink",
+    "front": "computercraft:block/nano_front",
+    "side": "computercraft:block/nano_side",
+    "top": "computercraft:block/nano_top"
+  }
+}

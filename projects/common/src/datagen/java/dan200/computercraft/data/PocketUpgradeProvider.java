@@ -6,6 +6,7 @@ package dan200.computercraft.data;
 
 import dan200.computercraft.api.ComputerCraftAPI;
 import dan200.computercraft.api.pocket.IPocketUpgrade;
+import dan200.computercraft.shared.pocket.peripherals.PocketFireworks;
 import dan200.computercraft.shared.pocket.peripherals.PocketModem;
 import dan200.computercraft.shared.pocket.peripherals.PocketSpeaker;
 import net.minecraft.data.worldgen.BootstrapContext;
@@ -20,6 +21,7 @@ class PocketUpgradeProvider {
         upgrades.register(id("speaker"), new PocketSpeaker(new ItemStack(Items.SPEAKER.get())));
         upgrades.register(id("wireless_modem_normal"), new PocketModem(new ItemStack(Items.WIRELESS_MODEM_NORMAL.get()), false));
         upgrades.register(id("wireless_modem_advanced"), new PocketModem(new ItemStack(Items.WIRELESS_MODEM_ADVANCED.get()), true));
+        upgrades.register(id("firework_launcher"), new PocketFireworks());
     }
 
     private static ResourceKey<IPocketUpgrade> id(String id) {

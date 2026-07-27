@@ -85,11 +85,31 @@ public class ComputerBlockEntity extends AbstractComputerBlockEntity {
 
     @Override
     protected ServerComputer createComputer(int id) {
-        return new ServerComputer((ServerLevel) getLevel(), getBlockPos(), ServerComputer.properties(id, getFamily())
+        var properties = ServerComputer.properties(id, getFamily())
             .label(getLabel())
-            .terminalSize(terminalSize != null ? terminalSize : new TerminalSize(ConfigSpec.computerTermWidth.get(), ConfigSpec.computerTermHeight.get()))
-            .storageCapacity(storageCapacity)
-        );
+            .terminalSize(terminalSize != null ? terminalSize : defaultTerminalSize())
+            .storageCapacity(storageCapacity);
+        configureComputer(properties);
+        return new ServerComputer((ServerLevel) getLevel(), getBlockPos(), properties);
+    }
+
+    /**
+     * Configure additional properties (such as {@linkplain ServerComputer.Properties#addComponent components}) of
+     * this block's computer before it is created.
+     *
+     * @param properties The computer properties to configure.
+     */
+    protected void configureComputer(ServerComputer.Properties properties) {
+    }
+
+    /**
+     * Get the terminal size to use when this computer has no {@linkplain ModRegistry.DataComponents#TERMINAL_SIZE
+     * explicit terminal size} set.
+     *
+     * @return The default terminal size.
+     */
+    protected TerminalSize defaultTerminalSize() {
+        return new TerminalSize(ConfigSpec.computerTermWidth.get(), ConfigSpec.computerTermHeight.get());
     }
 
     protected boolean isUsableByPlayer(Player player) {

@@ -28,10 +28,17 @@ import dan200.computercraft.shared.command.arguments.TrackingFieldArgumentType;
 import dan200.computercraft.shared.common.ClearColourRecipe;
 import dan200.computercraft.shared.common.ColourableRecipe;
 import dan200.computercraft.shared.common.DefaultBundledRedstoneProvider;
+import dan200.computercraft.shared.computer.apis.AlertAPI;
+import dan200.computercraft.shared.computer.apis.DisplayAPI;
+import dan200.computercraft.shared.computer.apis.NanoChipAPI;
 import dan200.computercraft.shared.computer.apis.CommandAPI;
+import dan200.computercraft.shared.computer.blocks.BillboardBlockEntity;
 import dan200.computercraft.shared.computer.blocks.CommandComputerBlock;
 import dan200.computercraft.shared.computer.blocks.ComputerBlock;
 import dan200.computercraft.shared.computer.blocks.ComputerBlockEntity;
+import dan200.computercraft.shared.computer.blocks.KioskBlockEntity;
+import dan200.computercraft.shared.computer.blocks.NanoComputerBlock;
+import dan200.computercraft.shared.computer.blocks.NanoComputerBlockEntity;
 import dan200.computercraft.shared.computer.core.ComputerFamily;
 import dan200.computercraft.shared.computer.core.ServerComputer;
 import dan200.computercraft.shared.computer.core.TerminalSize;
@@ -55,10 +62,21 @@ import dan200.computercraft.shared.media.recipes.DiskRecipe;
 import dan200.computercraft.shared.media.recipes.PrintoutRecipe;
 import dan200.computercraft.shared.network.container.ComputerContainerData;
 import dan200.computercraft.shared.network.container.ContainerData;
+import dan200.computercraft.shared.peripheral.camera.CameraBlock;
+import dan200.computercraft.shared.peripheral.camera.CameraBlockEntity;
+import dan200.computercraft.shared.peripheral.controller.ControllerBlock;
+import dan200.computercraft.shared.peripheral.controller.ControllerBlockEntity;
+import dan200.computercraft.shared.peripheral.cassette.CassetteDeckBlock;
+import dan200.computercraft.shared.peripheral.cassette.CassetteDeckBlockEntity;
+import dan200.computercraft.shared.peripheral.cassette.CassetteDeckMenu;
+import dan200.computercraft.shared.peripheral.chromalamp.ChromaLampBlock;
+import dan200.computercraft.shared.peripheral.chromalamp.ChromaLampBlockEntity;
 import dan200.computercraft.shared.peripheral.commandblock.CommandBlockPeripheral;
 import dan200.computercraft.shared.peripheral.diskdrive.DiskDriveBlock;
 import dan200.computercraft.shared.peripheral.diskdrive.DiskDriveBlockEntity;
 import dan200.computercraft.shared.peripheral.diskdrive.DiskDriveMenu;
+import dan200.computercraft.shared.peripheral.diviningrod.DiviningRodBlock;
+import dan200.computercraft.shared.peripheral.diviningrod.DiviningRodBlockEntity;
 import dan200.computercraft.shared.peripheral.modem.wired.*;
 import dan200.computercraft.shared.peripheral.modem.wireless.WirelessModemBlock;
 import dan200.computercraft.shared.peripheral.modem.wireless.WirelessModemBlockEntity;
@@ -69,6 +87,10 @@ import dan200.computercraft.shared.peripheral.printer.PrinterBlockEntity;
 import dan200.computercraft.shared.peripheral.printer.PrinterMenu;
 import dan200.computercraft.shared.peripheral.redstone.RedstoneRelayBlock;
 import dan200.computercraft.shared.peripheral.redstone.RedstoneRelayBlockEntity;
+import dan200.computercraft.shared.peripheral.seismograph.SeismographBlock;
+import dan200.computercraft.shared.peripheral.seismograph.SeismographBlockEntity;
+import dan200.computercraft.shared.peripheral.sequencer.RedstoneSequencerBlock;
+import dan200.computercraft.shared.peripheral.sequencer.RedstoneSequencerBlockEntity;
 import dan200.computercraft.shared.peripheral.speaker.SpeakerBlock;
 import dan200.computercraft.shared.peripheral.speaker.SpeakerBlockEntity;
 import dan200.computercraft.shared.platform.PlatformHelper;
@@ -76,6 +98,7 @@ import dan200.computercraft.shared.platform.RegistrationHelper;
 import dan200.computercraft.shared.platform.RegistryEntry;
 import dan200.computercraft.shared.pocket.apis.PocketAPI;
 import dan200.computercraft.shared.pocket.items.PocketComputerItem;
+import dan200.computercraft.shared.pocket.peripherals.PocketFireworks;
 import dan200.computercraft.shared.pocket.peripherals.PocketModem;
 import dan200.computercraft.shared.pocket.peripherals.PocketSpeaker;
 import dan200.computercraft.shared.pocket.recipes.PocketComputerUpgradeRecipe;
@@ -91,10 +114,13 @@ import dan200.computercraft.shared.turtle.core.TurtleAccessInternal;
 import dan200.computercraft.shared.turtle.inventory.TurtleMenu;
 import dan200.computercraft.shared.turtle.items.TurtleItem;
 import dan200.computercraft.shared.turtle.recipes.TurtleUpgradeRecipe;
+import dan200.computercraft.shared.turtle.upgrades.CameraUpgradeState;
+import dan200.computercraft.shared.turtle.upgrades.TurtleCamera;
 import dan200.computercraft.shared.turtle.upgrades.TurtleCraftingTable;
 import dan200.computercraft.shared.turtle.upgrades.TurtleModem;
 import dan200.computercraft.shared.turtle.upgrades.TurtleSpeaker;
 import dan200.computercraft.shared.turtle.upgrades.TurtleTool;
+import dan200.computercraft.shared.turtle.upgrades.TurtleVacuum;
 import dan200.computercraft.shared.util.DataComponentUtil;
 import dan200.computercraft.shared.util.NonNegativeId;
 import dan200.computercraft.shared.util.StorageCapacity;
@@ -173,6 +199,13 @@ public final class ModRegistry {
         public static final RegistryEntry<ComputerBlock<ComputerBlockEntity>> COMPUTER_COMMAND = REGISTRY.register("computer_command",
             () -> new CommandComputerBlock<>(redstoneConductor().strength(-1, 6000000.0F), BlockEntities.COMPUTER_COMMAND));
 
+        public static final RegistryEntry<ComputerBlock<KioskBlockEntity>> KIOSK = REGISTRY.register("kiosk",
+            () -> new ComputerBlock<>(redstoneConductor().mapColor(MapColor.GOLD), BlockEntities.KIOSK));
+        public static final RegistryEntry<ComputerBlock<NanoComputerBlockEntity>> NANO_COMPUTER = REGISTRY.register("nano_computer",
+            () -> new NanoComputerBlock(redstoneConductor().mapColor(MapColor.STONE), BlockEntities.NANO_COMPUTER));
+        public static final RegistryEntry<ComputerBlock<BillboardBlockEntity>> BILLBOARD = REGISTRY.register("billboard",
+            () -> new ComputerBlock<>(redstoneConductor().mapColor(MapColor.GOLD), BlockEntities.BILLBOARD));
+
         public static final RegistryEntry<TurtleBlock> TURTLE_NORMAL = REGISTRY.register("turtle_normal",
             () -> new TurtleBlock(turtleProperties().mapColor(MapColor.STONE), BlockEntities.TURTLE_NORMAL));
         public static final RegistryEntry<TurtleBlock> TURTLE_ADVANCED = REGISTRY.register("turtle_advanced",
@@ -180,6 +213,7 @@ public final class ModRegistry {
 
         public static final RegistryEntry<SpeakerBlock> SPEAKER = REGISTRY.register("speaker", () -> new SpeakerBlock(properties().mapColor(MapColor.STONE)));
         public static final RegistryEntry<DiskDriveBlock> DISK_DRIVE = REGISTRY.register("disk_drive", () -> new DiskDriveBlock(properties().mapColor(MapColor.STONE)));
+        public static final RegistryEntry<CassetteDeckBlock> CASSETTE_DECK = REGISTRY.register("cassette_deck", () -> new CassetteDeckBlock(properties().mapColor(MapColor.STONE)));
         public static final RegistryEntry<PrinterBlock> PRINTER = REGISTRY.register("printer", () -> new PrinterBlock(properties().mapColor(MapColor.STONE)));
 
         public static final RegistryEntry<MonitorBlock> MONITOR_NORMAL = REGISTRY.register("monitor_normal",
@@ -202,6 +236,22 @@ public final class ModRegistry {
 
         public static final RegistryEntry<RedstoneRelayBlock> REDSTONE_RELAY = REGISTRY.register("redstone_relay",
             () -> new RedstoneRelayBlock(redstoneConductor().mapColor(MapColor.STONE)));
+
+        public static final RegistryEntry<RedstoneSequencerBlock> REDSTONE_SEQUENCER = REGISTRY.register("redstone_sequencer",
+            () -> new RedstoneSequencerBlock(redstoneConductor().mapColor(MapColor.STONE)));
+
+        public static final RegistryEntry<CameraBlock> CAMERA = REGISTRY.register("camera",
+            () -> new CameraBlock(properties().mapColor(MapColor.STONE)));
+        public static final RegistryEntry<ControllerBlock> CONTROLLER = REGISTRY.register("controller",
+            () -> new ControllerBlock(properties().mapColor(MapColor.STONE)));
+        public static final RegistryEntry<SeismographBlock> SEISMOGRAPH = REGISTRY.register("seismograph",
+            () -> new SeismographBlock(properties().mapColor(MapColor.STONE)));
+
+        public static final RegistryEntry<ChromaLampBlock> CHROMA_LAMP = REGISTRY.register("chroma_lamp",
+            () -> new ChromaLampBlock(properties().mapColor(MapColor.QUARTZ).lightLevel(state -> state.getValue(ChromaLampBlock.LEVEL))));
+
+        public static final RegistryEntry<DiviningRodBlock> DIVINING_ROD = REGISTRY.register("divining_rod",
+            () -> new DiviningRodBlock(properties().mapColor(MapColor.STONE)));
     }
 
     public static class BlockEntities {
@@ -223,6 +273,13 @@ public final class ModRegistry {
         public static final RegistryEntry<BlockEntityType<ComputerBlockEntity>> COMPUTER_COMMAND =
             ofBlock(Blocks.COMPUTER_COMMAND, (p, s) -> new ComputerBlockEntity(BlockEntities.COMPUTER_COMMAND.get(), p, s, ComputerFamily.COMMAND));
 
+        public static final RegistryEntry<BlockEntityType<KioskBlockEntity>> KIOSK =
+            ofBlock(Blocks.KIOSK, (p, s) -> new KioskBlockEntity(BlockEntities.KIOSK.get(), p, s, ComputerFamily.ADVANCED));
+        public static final RegistryEntry<BlockEntityType<NanoComputerBlockEntity>> NANO_COMPUTER =
+            ofBlock(Blocks.NANO_COMPUTER, (p, s) -> new NanoComputerBlockEntity(BlockEntities.NANO_COMPUTER.get(), p, s, ComputerFamily.NORMAL));
+        public static final RegistryEntry<BlockEntityType<BillboardBlockEntity>> BILLBOARD =
+            ofBlock(Blocks.BILLBOARD, (p, s) -> new BillboardBlockEntity(BlockEntities.BILLBOARD.get(), p, s, ComputerFamily.ADVANCED));
+
         public static final RegistryEntry<BlockEntityType<TurtleBlockEntity>> TURTLE_NORMAL =
             ofBlock(Blocks.TURTLE_NORMAL, (p, s) -> new TurtleBlockEntity(BlockEntities.TURTLE_NORMAL.get(), p, s, () -> Config.turtleFuelLimit, ComputerFamily.NORMAL));
         public static final RegistryEntry<BlockEntityType<TurtleBlockEntity>> TURTLE_ADVANCED =
@@ -232,6 +289,8 @@ public final class ModRegistry {
             ofBlock(Blocks.SPEAKER, (p, s) -> new SpeakerBlockEntity(BlockEntities.SPEAKER.get(), p, s));
         public static final RegistryEntry<BlockEntityType<DiskDriveBlockEntity>> DISK_DRIVE =
             ofBlock(Blocks.DISK_DRIVE, (p, s) -> new DiskDriveBlockEntity(BlockEntities.DISK_DRIVE.get(), p, s));
+        public static final RegistryEntry<BlockEntityType<CassetteDeckBlockEntity>> CASSETTE_DECK =
+            ofBlock(Blocks.CASSETTE_DECK, (p, s) -> new CassetteDeckBlockEntity(BlockEntities.CASSETTE_DECK.get(), p, s));
         public static final RegistryEntry<BlockEntityType<PrinterBlockEntity>> PRINTER =
             ofBlock(Blocks.PRINTER, (p, s) -> new PrinterBlockEntity(BlockEntities.PRINTER.get(), p, s));
         public static final RegistryEntry<BlockEntityType<WiredModemFullBlockEntity>> WIRED_MODEM_FULL =
@@ -247,6 +306,19 @@ public final class ModRegistry {
         public static final RegistryEntry<BlockEntityType<CustomLecternBlockEntity>> LECTERN = ofBlock(Blocks.LECTERN, CustomLecternBlockEntity::new);
 
         public static final RegistryEntry<BlockEntityType<RedstoneRelayBlockEntity>> REDSTONE_RELAY = ofBlock(Blocks.REDSTONE_RELAY, RedstoneRelayBlockEntity::new);
+
+        public static final RegistryEntry<BlockEntityType<RedstoneSequencerBlockEntity>> REDSTONE_SEQUENCER =
+            ofBlock(Blocks.REDSTONE_SEQUENCER, (p, s) -> new RedstoneSequencerBlockEntity(BlockEntities.REDSTONE_SEQUENCER.get(), p, s));
+        public static final RegistryEntry<BlockEntityType<CameraBlockEntity>> CAMERA =
+            ofBlock(Blocks.CAMERA, (p, s) -> new CameraBlockEntity(BlockEntities.CAMERA.get(), p, s));
+        public static final RegistryEntry<BlockEntityType<ControllerBlockEntity>> CONTROLLER =
+            ofBlock(Blocks.CONTROLLER, (p, s) -> new ControllerBlockEntity(BlockEntities.CONTROLLER.get(), p, s));
+        public static final RegistryEntry<BlockEntityType<SeismographBlockEntity>> SEISMOGRAPH =
+            ofBlock(Blocks.SEISMOGRAPH, (p, s) -> new SeismographBlockEntity(BlockEntities.SEISMOGRAPH.get(), p, s));
+        public static final RegistryEntry<BlockEntityType<ChromaLampBlockEntity>> CHROMA_LAMP =
+            ofBlock(Blocks.CHROMA_LAMP, (p, s) -> new ChromaLampBlockEntity(BlockEntities.CHROMA_LAMP.get(), p, s));
+        public static final RegistryEntry<BlockEntityType<DiviningRodBlockEntity>> DIVINING_ROD =
+            ofBlock(Blocks.DIVINING_ROD, (p, s) -> new DiviningRodBlockEntity(BlockEntities.DIVINING_ROD.get(), p, s));
     }
 
     public static final class Items {
@@ -263,6 +335,9 @@ public final class ModRegistry {
         public static final RegistryEntry<BlockItem> COMPUTER_NORMAL = ofBlock(Blocks.COMPUTER_NORMAL, BlockItem::new);
         public static final RegistryEntry<BlockItem> COMPUTER_ADVANCED = ofBlock(Blocks.COMPUTER_ADVANCED, BlockItem::new);
         public static final RegistryEntry<GameMasterBlockItem> COMPUTER_COMMAND = ofBlock(Blocks.COMPUTER_COMMAND, GameMasterBlockItem::new);
+        public static final RegistryEntry<BlockItem> KIOSK = ofBlock(Blocks.KIOSK, BlockItem::new);
+        public static final RegistryEntry<BlockItem> NANO_COMPUTER = ofBlock(Blocks.NANO_COMPUTER, BlockItem::new);
+        public static final RegistryEntry<BlockItem> BILLBOARD = ofBlock(Blocks.BILLBOARD, BlockItem::new);
 
         public static final RegistryEntry<PocketComputerItem> POCKET_COMPUTER_NORMAL = REGISTRY.register("pocket_computer_normal",
             () -> new PocketComputerItem(properties().stacksTo(1), ComputerFamily.NORMAL));
@@ -274,8 +349,17 @@ public final class ModRegistry {
 
         public static final RegistryEntry<DiskItem> DISK =
             REGISTRY.register("disk", () -> new DiskItem(properties().stacksTo(1)));
+        public static final RegistryEntry<DiskItem> GOLDEN_DISK = REGISTRY.register("golden_disk", () -> new DiskItem(
+            properties().stacksTo(1).fireResistant().component(DataComponents.STORAGE_CAPACITY.get(), new StorageCapacity(640_000))
+        ));
         public static final RegistryEntry<DiskItem> TREASURE_DISK =
             REGISTRY.register("treasure_disk", () -> new DiskItem(properties().stacksTo(1)));
+
+        public static final RegistryEntry<CassetteItem> CASSETTE =
+            REGISTRY.register("cassette", () -> new CassetteItem(properties().stacksTo(1)));
+
+        public static final RegistryEntry<RomChipItem> ROM_CHIP =
+            REGISTRY.register("rom_chip", () -> new RomChipItem(properties().stacksTo(1)));
 
         private static Item.Properties printoutProperties() {
             return properties().stacksTo(1).component(DataComponents.PRINTOUT.get(), PrintoutData.EMPTY);
@@ -290,6 +374,7 @@ public final class ModRegistry {
 
         public static final RegistryEntry<BlockItem> SPEAKER = ofBlock(Blocks.SPEAKER, BlockItem::new);
         public static final RegistryEntry<BlockItem> DISK_DRIVE = ofBlock(Blocks.DISK_DRIVE, BlockItem::new);
+        public static final RegistryEntry<BlockItem> CASSETTE_DECK = ofBlock(Blocks.CASSETTE_DECK, BlockItem::new);
         public static final RegistryEntry<BlockItem> PRINTER = ofBlock(Blocks.PRINTER, BlockItem::new);
         public static final RegistryEntry<BlockItem> MONITOR_NORMAL = ofBlock(Blocks.MONITOR_NORMAL, BlockItem::new);
         public static final RegistryEntry<BlockItem> MONITOR_ADVANCED = ofBlock(Blocks.MONITOR_ADVANCED, BlockItem::new);
@@ -297,11 +382,19 @@ public final class ModRegistry {
         public static final RegistryEntry<BlockItem> WIRELESS_MODEM_ADVANCED = ofBlock(Blocks.WIRELESS_MODEM_ADVANCED, BlockItem::new);
         public static final RegistryEntry<BlockItem> WIRED_MODEM_FULL = ofBlock(Blocks.WIRED_MODEM_FULL, BlockItem::new);
         public static final RegistryEntry<BlockItem> REDSTONE_RELAY = ofBlock(Blocks.REDSTONE_RELAY, BlockItem::new);
+        public static final RegistryEntry<BlockItem> REDSTONE_SEQUENCER = ofBlock(Blocks.REDSTONE_SEQUENCER, BlockItem::new);
+        public static final RegistryEntry<BlockItem> CAMERA = ofBlock(Blocks.CAMERA, BlockItem::new);
+        public static final RegistryEntry<BlockItem> CONTROLLER = ofBlock(Blocks.CONTROLLER, BlockItem::new);
+        public static final RegistryEntry<BlockItem> SEISMOGRAPH = ofBlock(Blocks.SEISMOGRAPH, BlockItem::new);
+        public static final RegistryEntry<BlockItem> CHROMA_LAMP = ofBlock(Blocks.CHROMA_LAMP, BlockItem::new);
+        public static final RegistryEntry<BlockItem> DIVINING_ROD = ofBlock(Blocks.DIVINING_ROD, BlockItem::new);
 
         public static final RegistryEntry<CableBlockItem.Cable> CABLE = REGISTRY.register("cable",
             () -> new CableBlockItem.Cable(Blocks.CABLE.get(), properties()));
         public static final RegistryEntry<CableBlockItem.WiredModem> WIRED_MODEM = REGISTRY.register("wired_modem",
             () -> new CableBlockItem.WiredModem(Blocks.CABLE.get(), properties()));
+
+        public static final RegistryEntry<Item> VACUUM_NOZZLE = REGISTRY.register("vacuum_nozzle", () -> new Item(properties()));
     }
 
     public static final class DataComponents {
@@ -408,6 +501,29 @@ public final class ModRegistry {
         );
 
         /**
+         * The id of a cassette.
+         */
+        public static final RegistryEntry<DataComponentType<NonNegativeId>> CASSETTE_ID = register("cassette_id", b -> b
+            .persistent(NonNegativeId.CODEC).networkSynchronized(NonNegativeId.STREAM_CODEC)
+        );
+
+        /**
+         * The state of a turtle's camera upgrade.
+         *
+         * @see dan200.computercraft.shared.turtle.upgrades.TurtleCamera
+         */
+        public static final RegistryEntry<DataComponentType<CameraUpgradeState>> CAMERA = register("camera", b -> b
+            .persistent(CameraUpgradeState.CODEC).networkSynchronized(CameraUpgradeState.STREAM_CODEC)
+        );
+
+        /**
+         * The id of a ROM chip.
+         */
+        public static final RegistryEntry<DataComponentType<NonNegativeId>> CHIP_ID = register("chip_id", b -> b
+            .persistent(NonNegativeId.CODEC).networkSynchronized(NonNegativeId.STREAM_CODEC)
+        );
+
+        /**
          * The contents of a printed page/printed pages.
          *
          * @see PrintoutItem
@@ -427,6 +543,10 @@ public final class ModRegistry {
             REGISTRY.register("workbench", () -> UpgradeType.simpleWithCustomItem(TurtleCraftingTable::new));
         public static final RegistryEntry<UpgradeType<TurtleModem>> WIRELESS_MODEM =
             REGISTRY.register("wireless_modem", () -> UpgradeType.create(TurtleModem.CODEC));
+        public static final RegistryEntry<UpgradeType<TurtleVacuum>> VACUUM =
+            REGISTRY.register("vacuum", () -> UpgradeType.simpleWithCustomItem(TurtleVacuum::new));
+        public static final RegistryEntry<UpgradeType<TurtleCamera>> CAMERA =
+            REGISTRY.register("camera", () -> UpgradeType.simpleWithCustomItem(TurtleCamera::new));
 
         public static final RegistryEntry<UpgradeType<TurtleTool>> TOOL = REGISTRY.register("tool", () -> UpgradeType.create(TurtleTool.CODEC));
     }
@@ -437,6 +557,8 @@ public final class ModRegistry {
         public static final RegistryEntry<UpgradeType<PocketSpeaker>> SPEAKER =
             REGISTRY.register("speaker", () -> UpgradeType.simpleWithCustomItem(PocketSpeaker::new));
         public static final RegistryEntry<UpgradeType<PocketModem>> WIRELESS_MODEM = REGISTRY.register("wireless_modem", () -> UpgradeType.create(PocketModem.CODEC));
+        public static final RegistryEntry<UpgradeType<PocketFireworks>> FIREWORK_LAUNCHER =
+            REGISTRY.register("firework_launcher", () -> UpgradeType.simple(new PocketFireworks()));
     }
 
     public static class Menus {
@@ -456,6 +578,9 @@ public final class ModRegistry {
 
         public static final RegistryEntry<MenuType<DiskDriveMenu>> DISK_DRIVE = REGISTRY.register("disk_drive",
             () -> new MenuType<>(DiskDriveMenu::new, FeatureFlags.VANILLA_SET));
+
+        public static final RegistryEntry<MenuType<CassetteDeckMenu>> CASSETTE_DECK = REGISTRY.register("cassette_deck",
+            () -> new MenuType<>(CassetteDeckMenu::new, FeatureFlags.VANILLA_SET));
 
         public static final RegistryEntry<MenuType<PrinterMenu>> PRINTER = REGISTRY.register("printer",
             () -> new MenuType<>(PrinterMenu::new, FeatureFlags.VANILLA_SET));
@@ -558,6 +683,9 @@ public final class ModRegistry {
                 out.accept(new ItemStack(Items.COMPUTER_NORMAL.get()));
                 out.accept(new ItemStack(Items.COMPUTER_ADVANCED.get()));
                 if (context.hasPermissions()) out.accept(new ItemStack(Items.COMPUTER_COMMAND.get()));
+                out.accept(new ItemStack(Items.NANO_COMPUTER.get()));
+                out.accept(new ItemStack(Items.KIOSK.get()));
+                out.accept(new ItemStack(Items.BILLBOARD.get()));
                 addTurtle(out, Items.TURTLE_NORMAL.get(), context.holders());
                 addTurtle(out, Items.TURTLE_ADVANCED.get(), context.holders());
                 addPocket(out, Items.POCKET_COMPUTER_NORMAL.get(), context.holders());
@@ -569,11 +697,18 @@ public final class ModRegistry {
                 out.accept(Items.WIRED_MODEM.get());
                 out.accept(Items.WIRED_MODEM_FULL.get());
                 out.accept(Items.REDSTONE_RELAY.get());
+                out.accept(Items.REDSTONE_SEQUENCER.get());
 
                 out.accept(Items.MONITOR_NORMAL.get());
                 out.accept(Items.MONITOR_ADVANCED.get());
 
                 out.accept(Items.SPEAKER.get());
+                out.accept(Items.VACUUM_NOZZLE.get());
+                out.accept(Items.CAMERA.get());
+                out.accept(Items.CONTROLLER.get());
+                out.accept(Items.SEISMOGRAPH.get());
+                out.accept(Items.CHROMA_LAMP.get());
+                out.accept(Items.DIVINING_ROD.get());
 
                 out.accept(Items.PRINTER.get());
                 out.accept(Items.PRINTED_PAGE.get());
@@ -584,6 +719,11 @@ public final class ModRegistry {
                 for (var colour = 0; colour < 16; colour++) {
                     out.accept(DataComponentUtil.createStack(Items.DISK.get(), net.minecraft.core.component.DataComponents.DYED_COLOR, new DyedItemColor(Colour.VALUES[colour].getHex(), false)));
                 }
+                out.accept(Items.GOLDEN_DISK.get());
+
+                out.accept(Items.CASSETTE_DECK.get());
+                out.accept(Items.CASSETTE.get());
+                out.accept(Items.ROM_CHIP.get());
             })
             .build());
     }
@@ -626,6 +766,18 @@ public final class ModRegistry {
             return admin == null ? null : new CommandAPI(computer, admin);
         });
 
+        ComputerCraftAPI.registerAPIFactory(AlertAPI::new);
+
+        ComputerCraftAPI.registerAPIFactory(computer -> {
+            var billboard = computer.getComponent(BillboardBlockEntity.COMPONENT);
+            return billboard == null ? null : new DisplayAPI(billboard);
+        });
+
+        ComputerCraftAPI.registerAPIFactory(computer -> {
+            var nano = computer.getComponent(NanoComputerBlockEntity.COMPONENT);
+            return nano == null ? null : new NanoChipAPI(computer, nano);
+        });
+
         VanillaDetailRegistries.ITEM_STACK.addProvider(ItemDetails::fill);
         VanillaDetailRegistries.BLOCK_IN_WORLD.addProvider(BlockDetails::fill);
         VanillaDetailRegistries.ENTITY.addProvider(EntityDetails::fill);
@@ -647,11 +799,15 @@ public final class ModRegistry {
     public static void registerPeripherals(BlockComponent<IPeripheral, Direction> peripherals) {
         peripherals.registerForBlockEntity(ModRegistry.BlockEntities.COMPUTER_NORMAL.get(), (b, d) -> b.peripheral());
         peripherals.registerForBlockEntity(ModRegistry.BlockEntities.COMPUTER_ADVANCED.get(), (b, d) -> b.peripheral());
+        peripherals.registerForBlockEntity(ModRegistry.BlockEntities.KIOSK.get(), (b, d) -> b.peripheral());
+        peripherals.registerForBlockEntity(ModRegistry.BlockEntities.NANO_COMPUTER.get(), (b, d) -> b.peripheral());
+        peripherals.registerForBlockEntity(ModRegistry.BlockEntities.BILLBOARD.get(), (b, d) -> b.peripheral());
         peripherals.registerForBlockEntity(ModRegistry.BlockEntities.TURTLE_NORMAL.get(), (b, d) -> b.peripheral());
         peripherals.registerForBlockEntity(ModRegistry.BlockEntities.TURTLE_ADVANCED.get(), (b, d) -> b.peripheral());
         peripherals.registerForBlockEntity(ModRegistry.BlockEntities.SPEAKER.get(), (b, d) -> b.peripheral());
         peripherals.registerForBlockEntity(ModRegistry.BlockEntities.PRINTER.get(), (b, d) -> b.peripheral());
         peripherals.registerForBlockEntity(ModRegistry.BlockEntities.DISK_DRIVE.get(), (b, d) -> b.peripheral());
+        peripherals.registerForBlockEntity(ModRegistry.BlockEntities.CASSETTE_DECK.get(), (b, d) -> b.peripheral());
         peripherals.registerForBlockEntity(ModRegistry.BlockEntities.MONITOR_NORMAL.get(), (b, d) -> b.peripheral());
         peripherals.registerForBlockEntity(ModRegistry.BlockEntities.MONITOR_ADVANCED.get(), (b, d) -> b.peripheral());
         peripherals.registerForBlockEntity(ModRegistry.BlockEntities.WIRELESS_MODEM_NORMAL.get(), WirelessModemBlockEntity::getPeripheral);
@@ -659,6 +815,12 @@ public final class ModRegistry {
         peripherals.registerForBlockEntity(ModRegistry.BlockEntities.WIRED_MODEM_FULL.get(), WiredModemFullBlockEntity::getPeripheral);
         peripherals.registerForBlockEntity(ModRegistry.BlockEntities.CABLE.get(), CableBlockEntity::getPeripheral);
         peripherals.registerForBlockEntity(ModRegistry.BlockEntities.REDSTONE_RELAY.get(), (b, d) -> b.peripheral());
+        peripherals.registerForBlockEntity(ModRegistry.BlockEntities.REDSTONE_SEQUENCER.get(), (b, d) -> b.peripheral());
+        peripherals.registerForBlockEntity(ModRegistry.BlockEntities.CAMERA.get(), (b, d) -> b.peripheral());
+        peripherals.registerForBlockEntity(ModRegistry.BlockEntities.CONTROLLER.get(), (b, d) -> b.peripheral());
+        peripherals.registerForBlockEntity(ModRegistry.BlockEntities.SEISMOGRAPH.get(), (b, d) -> b.peripheral());
+        peripherals.registerForBlockEntity(ModRegistry.BlockEntities.CHROMA_LAMP.get(), (b, d) -> b.peripheral());
+        peripherals.registerForBlockEntity(ModRegistry.BlockEntities.DIVINING_ROD.get(), (b, d) -> b.peripheral());
 
         peripherals.registerForBlockEntity(BlockEntityType.COMMAND_BLOCK, (b, d) -> Config.enableCommandBlock ? new CommandBlockPeripheral(b) : null);
     }
@@ -676,10 +838,12 @@ public final class ModRegistry {
     public static void registerMedia(ItemComponent<IMedia> media) {
         media.registerForItems((s, c) -> MountMedia.COMPUTER,
             ModRegistry.Items.COMPUTER_NORMAL.get(), ModRegistry.Items.COMPUTER_ADVANCED.get(),
+            ModRegistry.Items.KIOSK.get(), ModRegistry.Items.NANO_COMPUTER.get(), ModRegistry.Items.BILLBOARD.get(),
             ModRegistry.Items.TURTLE_NORMAL.get(), ModRegistry.Items.TURTLE_ADVANCED.get(),
             ModRegistry.Items.POCKET_COMPUTER_NORMAL.get(), ModRegistry.Items.POCKET_COMPUTER_ADVANCED.get()
         );
-        media.registerForItems((s, c) -> MountMedia.DISK, ModRegistry.Items.DISK.get());
+        media.registerForItems((s, c) -> MountMedia.DISK, ModRegistry.Items.DISK.get(), ModRegistry.Items.GOLDEN_DISK.get());
+        media.registerForItems((s, c) -> MountMedia.CHIP, ModRegistry.Items.ROM_CHIP.get());
         media.registerForItems((s, c) -> TreasureDiskMedia.INSTANCE, ModRegistry.Items.TREASURE_DISK.get());
         media.registerFallback((stack, ctx) -> {
             if (stack.getItem() instanceof IMedia m) return m;

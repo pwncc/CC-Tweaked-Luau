@@ -107,12 +107,18 @@ object TestHooks {
     fun areComputersIdle(server: MinecraftServer) = ComputerThreadReflection.isFullyIdle(ServerContext.get(server))
 
     private val testClasses = listOf(
+        Modem_Video_Test::class.java,
+        Camera_View_Test::class.java,
+        Cassette_Test::class.java,
+        Chroma_Lamp_Test::class.java,
         Component_Test::class.java,
         Computer_Test::class.java,
+        Controller_Test::class.java,
         CraftOs_Test::class.java,
         Details_Test::class.java,
         Disk_Test::class.java,
         Disk_Drive_Test::class.java,
+        Divining_Rod_Test::class.java,
         Inventory_Test::class.java,
         Loot_Test::class.java,
         Modem_Test::class.java,
@@ -122,6 +128,8 @@ object TestHooks {
         Printout_Test::class.java,
         Recipe_Test::class.java,
         Relay_Test::class.java,
+        Sable_Test::class.java,
+        Sequencer_Test::class.java,
         Speaker_Test::class.java,
         Turtle_Test::class.java,
     )

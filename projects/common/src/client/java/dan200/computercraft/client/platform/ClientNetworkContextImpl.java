@@ -11,11 +11,25 @@ import dan200.computercraft.client.gui.OptionScreen;
 import dan200.computercraft.client.pocket.ClientPocketComputers;
 import dan200.computercraft.client.sound.SpeakerManager;
 import dan200.computercraft.shared.command.text.TableBuilder;
+import dan200.computercraft.shared.computer.blocks.BillboardBlockEntity;
 import dan200.computercraft.shared.computer.core.ComputerState;
 import dan200.computercraft.shared.computer.menu.ComputerMenu;
 import dan200.computercraft.shared.computer.terminal.TerminalState;
 import dan200.computercraft.shared.computer.upload.UploadResult;
+import dan200.computercraft.client.camera.ClientCameraZones;
+import dan200.computercraft.client.render.PixelDisplays;
+import dan200.computercraft.client.render.remoteview.RemoteViewCache;
+import dan200.computercraft.shared.network.client.CameraCaptureMessage;
+import dan200.computercraft.shared.network.client.CameraZonesMessage;
 import dan200.computercraft.shared.network.client.ClientNetworkContext;
+import dan200.computercraft.shared.network.client.ControllerOpenMessage;
+import dan200.computercraft.shared.network.client.PixelDisplayMessage;
+import dan200.computercraft.shared.network.client.RemoteViewChunkMessage;
+import dan200.computercraft.shared.network.client.RemoteViewConfigMessage;
+import dan200.computercraft.shared.network.client.RemoteViewEffectMessage;
+import dan200.computercraft.shared.network.client.RemoteViewEntitiesMessage;
+import dan200.computercraft.shared.network.client.RemoteViewEnvironmentMessage;
+import dan200.computercraft.shared.network.client.RemoteViewSectionsMessage;
 import dan200.computercraft.shared.peripheral.monitor.MonitorBlockEntity;
 import dan200.computercraft.shared.peripheral.speaker.EncodedAudio;
 import dan200.computercraft.shared.peripheral.speaker.SpeakerPosition;
@@ -36,6 +50,72 @@ import java.util.UUID;
  */
 @AutoService(ClientNetworkContext.class)
 public final class ClientNetworkContextImpl implements ClientNetworkContext {
+    @Override
+    public void handleBillboardData(BlockPos pos, TerminalState terminal) {
+        var player = Minecraft.getInstance().player;
+        if (player == null) return;
+
+        var te = player.level().getBlockEntity(pos);
+        if (!(te instanceof BillboardBlockEntity billboard)) return;
+
+        billboard.readDisplayState(terminal);
+    }
+
+    @Override
+    public void handleRemoteViewConfig(RemoteViewConfigMessage config) {
+        RemoteViewCache.handleConfig(config);
+    }
+
+    @Override
+    public void handleRemoteViewSections(RemoteViewSectionsMessage sections) {
+        RemoteViewCache.handleSections(sections);
+    }
+
+    @Override
+    public void handleRemoteViewStop(int channel) {
+        RemoteViewCache.handleStop(channel);
+    }
+
+    @Override
+    public void handleCameraCapture(CameraCaptureMessage message) {
+        RemoteViewCache.startCapture(message.requestId(), message.channel(), message.width(), message.height());
+    }
+
+    @Override
+    public void handlePixelDisplay(PixelDisplayMessage message) {
+        PixelDisplays.handle(message);
+    }
+
+    @Override
+    public void handleCameraZones(CameraZonesMessage message) {
+        ClientCameraZones.setZones(message.zones());
+    }
+
+    @Override
+    public void handleRemoteViewEntities(RemoteViewEntitiesMessage message) {
+        RemoteViewCache.handleEntities(message);
+    }
+
+    @Override
+    public void handleRemoteViewChunk(RemoteViewChunkMessage message) {
+        RemoteViewCache.handleChunk(message);
+    }
+
+    @Override
+    public void handleRemoteViewEnvironment(RemoteViewEnvironmentMessage message) {
+        RemoteViewCache.handleEnvironment(message);
+    }
+
+    @Override
+    public void handleRemoteViewEffect(RemoteViewEffectMessage message) {
+        RemoteViewCache.handleEffect(message);
+    }
+
+    @Override
+    public void handleControllerOpen(ControllerOpenMessage message) {
+        Minecraft.getInstance().setScreen(new dan200.computercraft.client.gui.ControlScreen(message.pos()));
+    }
+
     @Override
     public void handleChatTable(TableBuilder table) {
         ClientTableFormatter.INSTANCE.display(table);

@@ -1,0 +1,8 @@
+{
+  "parent": "minecraft:block/orientable",
+  "textures": {
+    "front": "computercraft:block/controller_front",
+    "side": "computercraft:block/controller_side",
+    "top": "computercraft:block/controller_top"
+  }
+}

@@ -51,6 +51,7 @@ public class ComputerCraftClient {
         ClientRegistry.register();
         ClientRegistry.registerTurtleModellers(FabricComputerCraftAPIClient::registerTurtleUpgradeModeller);
         ClientRegistry.registerItemColours(ColorProviderRegistry.ITEM::register);
+        ClientRegistry.registerBlockColours(ColorProviderRegistry.BLOCK::register);
         ClientRegistry.registerMenuScreens(MenuScreens::register);
         ClientRegistry.registerMainThread(ItemProperties::register);
 

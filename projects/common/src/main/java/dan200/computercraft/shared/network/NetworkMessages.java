@@ -28,6 +28,9 @@ public final class NetworkMessages {
     public static final CustomPacketPayload.Type<ComputerActionServerMessage> COMPUTER_ACTION = registerServerbound("computer_action", ComputerActionServerMessage.STREAM_CODEC);
     public static final CustomPacketPayload.Type<KeyEventServerMessage> KEY_EVENT = registerServerbound("key_event", KeyEventServerMessage.STREAM_CODEC);
     public static final CustomPacketPayload.Type<MouseEventServerMessage> MOUSE_EVENT = registerServerbound("mouse_event", MouseEventServerMessage.STREAM_CODEC);
+    public static final CustomPacketPayload.Type<WatchChannelMessage> WATCH_CHANNEL = registerServerbound("watch_channel", WatchChannelMessage.STREAM_CODEC);
+    public static final CustomPacketPayload.Type<CameraFrameMessage> CAMERA_FRAME = registerServerbound("camera_frame", CameraFrameMessage.STREAM_CODEC);
+    public static final CustomPacketPayload.Type<ControllerInputMessage> CONTROLLER_INPUT = registerServerbound("controller_input", ControllerInputMessage.STREAM_CODEC);
     public static final CustomPacketPayload.Type<PasteEventComputerMessage> PASTE_EVENT = registerServerbound("paste_event", PasteEventComputerMessage.STREAM_CODEC);
     public static final CustomPacketPayload.Type<UploadFileMessage> UPLOAD_FILE = register(serverMessages, "upload_file", UploadFileMessage.STREAM_CODEC);
 
@@ -37,6 +40,18 @@ public final class NetworkMessages {
     public static final CustomPacketPayload.Type<ComputerTerminalClientMessage> COMPUTER_TERMINAL = registerClientbound("computer_terminal", ComputerTerminalClientMessage.STREAM_CODEC);
     public static final CustomPacketPayload.Type<PlayRecordClientMessage> PLAY_RECORD = registerClientbound("play_record", PlayRecordClientMessage.STREAM_CODEC);
     public static final CustomPacketPayload.Type<MonitorClientMessage> MONITOR_CLIENT = registerClientbound("monitor_client", MonitorClientMessage.STREAM_CODEC);
+    public static final CustomPacketPayload.Type<BillboardClientMessage> BILLBOARD_CLIENT = registerClientbound("billboard_client", BillboardClientMessage.STREAM_CODEC);
+    public static final CustomPacketPayload.Type<RemoteViewConfigMessage> REMOTE_VIEW_CONFIG = registerClientbound("remote_view_config", RemoteViewConfigMessage.STREAM_CODEC);
+    public static final CustomPacketPayload.Type<RemoteViewSectionsMessage> REMOTE_VIEW_SECTIONS = registerClientbound("remote_view_sections", RemoteViewSectionsMessage.STREAM_CODEC);
+    public static final CustomPacketPayload.Type<RemoteViewStopMessage> REMOTE_VIEW_STOP = registerClientbound("remote_view_stop", RemoteViewStopMessage.STREAM_CODEC);
+    public static final CustomPacketPayload.Type<CameraCaptureMessage> CAMERA_CAPTURE = registerClientbound("camera_capture", CameraCaptureMessage.STREAM_CODEC);
+    public static final CustomPacketPayload.Type<PixelDisplayMessage> PIXEL_DISPLAY = registerClientbound("pixel_display", PixelDisplayMessage.STREAM_CODEC);
+    public static final CustomPacketPayload.Type<CameraZonesMessage> CAMERA_ZONES = registerClientbound("camera_zones", CameraZonesMessage.STREAM_CODEC);
+    public static final CustomPacketPayload.Type<RemoteViewEntitiesMessage> REMOTE_VIEW_ENTITIES = registerClientbound("remote_view_entities", RemoteViewEntitiesMessage.STREAM_CODEC);
+    public static final CustomPacketPayload.Type<RemoteViewChunkMessage> REMOTE_VIEW_CHUNK = registerClientbound("remote_view_chunk", RemoteViewChunkMessage.STREAM_CODEC);
+    public static final CustomPacketPayload.Type<RemoteViewEnvironmentMessage> REMOTE_VIEW_ENVIRONMENT = registerClientbound("remote_view_environment", RemoteViewEnvironmentMessage.STREAM_CODEC);
+    public static final CustomPacketPayload.Type<RemoteViewEffectMessage> REMOTE_VIEW_EFFECT = registerClientbound("remote_view_effect", RemoteViewEffectMessage.STREAM_CODEC);
+    public static final CustomPacketPayload.Type<ControllerOpenMessage> CONTROLLER_OPEN = registerClientbound("controller_open", ControllerOpenMessage.STREAM_CODEC);
     public static final CustomPacketPayload.Type<SpeakerAudioClientMessage> SPEAKER_AUDIO = registerClientbound("speaker_audio", SpeakerAudioClientMessage.STREAM_CODEC);
     public static final CustomPacketPayload.Type<SpeakerMoveClientMessage> SPEAKER_MOVE = registerClientbound("speaker_move", SpeakerMoveClientMessage.STREAM_CODEC);
     public static final CustomPacketPayload.Type<SpeakerPlayClientMessage> SPEAKER_PLAY = registerClientbound("speaker_play", SpeakerPlayClientMessage.STREAM_CODEC);

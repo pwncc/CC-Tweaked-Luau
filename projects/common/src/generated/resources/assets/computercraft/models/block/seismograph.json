@@ -1,0 +1,8 @@
+{
+  "parent": "minecraft:block/orientable",
+  "textures": {
+    "front": "computercraft:block/seismograph_front",
+    "side": "computercraft:block/seismograph_side",
+    "top": "computercraft:block/seismograph_top"
+  }
+}

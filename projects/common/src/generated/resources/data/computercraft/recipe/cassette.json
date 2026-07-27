@@ -1,0 +1,13 @@
+{
+  "type": "minecraft:crafting_shapeless",
+  "category": "redstone",
+  "ingredients": [
+    {"tag": "c:strings"},
+    {"tag": "c:strings"},
+    {"tag": "c:strings"},
+    {"tag": "c:strings"},
+    {"tag": "c:ingots/iron"},
+    {"tag": "c:dusts/redstone"}
+  ],
+  "result": {"count": 1, "id": "computercraft:cassette"}
+}

@@ -7,22 +7,29 @@ package dan200.computercraft.shared.peripheral.monitor;
 import dan200.computercraft.core.terminal.Terminal;
 import dan200.computercraft.shared.computer.terminal.NetworkedTerminal;
 import dan200.computercraft.shared.computer.terminal.TerminalState;
+import net.minecraft.world.level.block.entity.BlockEntity;
 import org.jspecify.annotations.Nullable;
 
 import java.util.function.Supplier;
 
+/**
+ * The client-side state of an in-world terminal, used by monitors and billboards.
+ * <p>
+ * This holds the current {@link NetworkedTerminal} (updated from {@linkplain TerminalState terminal states} sent by
+ * the server), and an opaque {@link RenderState} for the renderer's use.
+ */
 public final class ClientMonitor {
-    private final MonitorBlockEntity origin;
+    private final BlockEntity origin;
 
     private @Nullable NetworkedTerminal terminal;
     private boolean terminalChanged;
     private @Nullable RenderState state;
 
-    public ClientMonitor(MonitorBlockEntity origin) {
+    public ClientMonitor(BlockEntity origin) {
         this.origin = origin;
     }
 
-    public MonitorBlockEntity getOrigin() {
+    public BlockEntity getOrigin() {
         return origin;
     }
 
@@ -39,7 +46,7 @@ public final class ClientMonitor {
         return (T) (state != null ? state : (this.state = create.get()));
     }
 
-    void destroy() {
+    public void destroy() {
         if (state != null) state.close();
         state = null;
     }
@@ -54,7 +61,7 @@ public final class ClientMonitor {
         return terminal;
     }
 
-    void read(@Nullable TerminalState state) {
+    public void read(@Nullable TerminalState state) {
         if (state != null) {
             if (terminal == null) {
                 terminal = state.create();

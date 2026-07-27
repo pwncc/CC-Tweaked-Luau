@@ -13,6 +13,7 @@ import dan200.computercraft.api.client.turtle.RegisterTurtleUpgradeModeller;
 import dan200.computercraft.api.client.turtle.TurtleUpgradeModeller;
 import dan200.computercraft.client.gui.*;
 import dan200.computercraft.client.pocket.ClientPocketComputers;
+import dan200.computercraft.client.render.BillboardBlockEntityRenderer;
 import dan200.computercraft.client.render.CustomLecternRenderer;
 import dan200.computercraft.client.render.RenderTypes;
 import dan200.computercraft.client.render.TurtleBlockEntityRenderer;
@@ -22,12 +23,14 @@ import dan200.computercraft.client.turtle.TurtleUpgradeModellers;
 import dan200.computercraft.core.util.Colour;
 import dan200.computercraft.shared.ModRegistry;
 import dan200.computercraft.shared.command.CommandComputerCraft;
+import dan200.computercraft.shared.peripheral.chromalamp.ChromaLampBlockEntity;
 import dan200.computercraft.shared.computer.core.ComputerState;
 import dan200.computercraft.shared.computer.core.ServerContext;
 import dan200.computercraft.shared.computer.inventory.AbstractComputerMenu;
 import dan200.computercraft.shared.turtle.TurtleOverlay;
 import net.minecraft.Util;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.color.block.BlockColor;
 import net.minecraft.client.color.item.ItemColor;
 import net.minecraft.client.gui.screens.MenuScreens;
 import net.minecraft.client.gui.screens.Screen;
@@ -49,6 +52,7 @@ import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.component.DyedItemColor;
 import net.minecraft.world.level.ItemLike;
+import net.minecraft.world.level.block.Block;
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -83,6 +87,7 @@ public final class ClientRegistry {
         BlockEntityRenderers.register(ModRegistry.BlockEntities.TURTLE_NORMAL.get(), TurtleBlockEntityRenderer::new);
         BlockEntityRenderers.register(ModRegistry.BlockEntities.TURTLE_ADVANCED.get(), TurtleBlockEntityRenderer::new);
         BlockEntityRenderers.register(ModRegistry.BlockEntities.LECTERN.get(), CustomLecternRenderer::new);
+        BlockEntityRenderers.register(ModRegistry.BlockEntities.BILLBOARD.get(), BillboardBlockEntityRenderer::new);
     }
 
     /**
@@ -112,6 +117,7 @@ public final class ClientRegistry {
 
         register.register(ModRegistry.Menus.PRINTER.get(), PrinterScreen::new);
         register.register(ModRegistry.Menus.DISK_DRIVE.get(), DiskDriveScreen::new);
+        register.register(ModRegistry.Menus.CASSETTE_DECK.get(), CassetteDeckScreen::new);
         register.register(ModRegistry.Menus.PRINTOUT.get(), PrintoutScreen::new);
     }
 
@@ -129,6 +135,11 @@ public final class ClientRegistry {
             ResourceLocation.fromNamespaceAndPath(ComputerCraftAPI.MOD_ID, "block/turtle_crafting_table_right")
         ));
         register.register(ModRegistry.TurtleUpgradeTypes.WIRELESS_MODEM.get(), new TurtleModemModeller());
+        register.register(ModRegistry.TurtleUpgradeTypes.VACUUM.get(), TurtleUpgradeModeller.flatItem());
+        register.register(ModRegistry.TurtleUpgradeTypes.CAMERA.get(), TurtleUpgradeModeller.sided(
+            ResourceLocation.fromNamespaceAndPath(ComputerCraftAPI.MOD_ID, "block/turtle_camera_left"),
+            ResourceLocation.fromNamespaceAndPath(ComputerCraftAPI.MOD_ID, "block/turtle_camera_right")
+        ));
         register.register(ModRegistry.TurtleUpgradeTypes.TOOL.get(), TurtleUpgradeModeller.flatItem());
     }
 
@@ -173,6 +184,18 @@ public final class ClientRegistry {
 
         register.accept(ClientRegistry::getTurtleColour, ModRegistry.Blocks.TURTLE_NORMAL.get());
         register.accept(ClientRegistry::getTurtleColour, ModRegistry.Blocks.TURTLE_ADVANCED.get());
+
+        // The chroma lamp is tinted in-world (see registerBlockColours), so keep the item white.
+        register.accept((stack, layer) -> -1, ModRegistry.Items.CHROMA_LAMP.get());
+    }
+
+    public static void registerBlockColours(BiConsumer<BlockColor, Block> register) {
+        register.accept(
+            (state, level, pos, tintIndex) -> tintIndex == 0 && level != null && pos != null
+                && level.getBlockEntity(pos) instanceof ChromaLampBlockEntity lamp
+                ? lamp.getColour() : -1,
+            ModRegistry.Blocks.CHROMA_LAMP.get()
+        );
     }
 
     private static int getPocketColour(ItemStack stack, int layer) {

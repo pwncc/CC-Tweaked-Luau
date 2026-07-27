@@ -6,6 +6,8 @@ package dan200.computercraft.shared;
 
 import dan200.computercraft.api.ComputerCraftAPI;
 import dan200.computercraft.core.apis.http.NetworkUtils;
+import dan200.computercraft.shared.camera.CameraChunkLoader;
+import dan200.computercraft.shared.camera.CameraSnapshots;
 import dan200.computercraft.shared.computer.core.ResourceMount;
 import dan200.computercraft.shared.computer.core.ServerContext;
 import dan200.computercraft.shared.computer.metrics.ComputerMBean;
@@ -74,6 +76,8 @@ public final class CommonHooks {
     public static void onServerTickStart(MinecraftServer server) {
         ServerContext.get(server).tick();
         TickScheduler.tick();
+        CameraSnapshots.tick(server);
+        CameraChunkLoader.tick(server);
     }
 
     public static void onServerTickEnd() {
@@ -105,6 +109,7 @@ public final class CommonHooks {
         server = null;
         ServerContext.close();
         NetworkUtils.reset();
+        CameraSnapshots.reset();
     }
 
     public static void onServerChunkUnload(LevelChunk chunk) {
