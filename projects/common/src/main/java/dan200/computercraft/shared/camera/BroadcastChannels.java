@@ -216,6 +216,22 @@ public final class BroadcastChannels {
             if (watchers.isEmpty()) watchers = new ArrayList<>();
             watchers.add(viewer);
         }
+
+        // Log arrivals and departures (not the steady state): losing cross-dimension sync mid-flight is the kind
+        // of thing that is otherwise invisible in the logs.
+        var last = instance.lastCrossDimWatchers.computeIfAbsent(level.dimension().location().toString(), k -> new HashSet<>());
+        for (var watcher : watchers) {
+            if (last.add(watcher.getUUID())) {
+                LOG.info("[camera] {} now tracks {} structures across dimensions (watching a camera there)", watcher.getScoreboardName(), level.dimension().location());
+            }
+        }
+        if (last.size() != watchers.size()) {
+            var current = new HashSet<UUID>();
+            for (var watcher : watchers) current.add(watcher.getUUID());
+            if (last.retainAll(current)) {
+                LOG.info("[camera] A viewer stopped tracking {} structures across dimensions", level.dimension().location());
+            }
+        }
         return watchers;
     }
 
@@ -300,6 +316,8 @@ public final class BroadcastChannels {
 
     private final Map<Integer, Channel> channels = new HashMap<>();
     private final Map<ServerPlayer, Intent> viewerIntents = new HashMap<>();
+    /** Which players tracked structures across dimensions last check, per dimension id; for transition logging. */
+    private final Map<String, Set<UUID>> lastCrossDimWatchers = new HashMap<>();
 
     /**
      * What a player asked to watch: the channel, and the screen they are watching it through (used to find the
@@ -382,6 +400,10 @@ public final class BroadcastChannels {
             if (channel == null || !channel.camera.equals(camera)) {
                 channel = new Channel(camera);
                 channels.put(channelId, channel);
+                LOG.info(
+                    "[camera] Channel {} adopted by the camera at {} {} (source block {})",
+                    channelId, level.dimension().location(), camera.getViewPosition(), camera.sourcePosition()
+                );
             }
         } else {
             return; // Another live camera owns this channel.

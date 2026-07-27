@@ -28,6 +28,8 @@ import org.jspecify.annotations.Nullable;
  * world data to watching players lives in {@link BroadcastChannels}.
  */
 public final class CameraBlockEntity extends BlockEntity implements CameraHolder {
+    private static final org.slf4j.Logger LOG = org.slf4j.LoggerFactory.getLogger(CameraBlockEntity.class);
+
     public static final int NO_CHANNEL = CameraHolder.NO_CHANNEL;
     public static final int MAX_CHANNEL = CameraHolder.MAX_CHANNEL;
 
@@ -78,6 +80,10 @@ public final class CameraBlockEntity extends BlockEntity implements CameraHolder
                 // The structure warped away without us: the block entity that replaced this camera at the
                 // destination takes over the broadcast (adopting the channel once this one lets go).
                 orphaned = true;
+                LOG.info(
+                    "[camera] Camera at {} {} lost its structure; releasing channel {}",
+                    level.dimension().location(), getBlockPos(), channel
+                );
                 stopBroadcast();
                 return;
             }
